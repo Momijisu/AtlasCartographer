@@ -130,6 +130,44 @@ export async function putObjects(id, objs) {
   notify({ local: true, store: 'docs', id });
 }
 
+// An object moved and scaled: every position times k, then shifted by
+// (dx, dy); sizes times k. For resizing a map.
+export function transformObject(o, k, dx, dy) {
+  const r = (v) => Math.round(v * 10) / 10;
+  const pts = (p) => p.map((v, i) => r(v * k + (i % 2 ? dy : dx)));
+  const { updatedAt, ...out } = o;
+  if (o.points) out.points = pts(o.points);
+  if (o.along) out.along = pts(o.along);
+  if (o.x != null) { out.x = r(o.x * k + dx); out.y = r(o.y * k + dy); }
+  if (o.w != null) { out.w = r(o.w * k); out.h = r(o.h * k); }
+  if (o.width != null) out.width = r(o.width * k);
+  if (o.size != null) out.size = r(o.size * k);
+  if (o.kind === 'style') {
+    if (o.gridSize) out.gridSize = r(o.gridSize * k);
+    if (o.coastWidth != null) out.coastWidth = r(o.coastWidth * k);
+  }
+  return out;
+}
+
+// Change a map's size: content scaled by k and shifted by (dx, dy).
+export async function resizeProject(id, { width, height, k = 1, dx = 0, dy = 0 }) {
+  const doc = await getDoc(id);
+  if (!doc) return;
+  const objs = Object.values(doc.objects).filter((o) => !o.deleted).map((o) => transformObject(o, k, dx, dy));
+  if (objs.length) await putObjects(id, objs);
+  await saveProject({ ...projects.get(id), width: Math.round(width), height: Math.round(height) });
+}
+
+// A copy of a map, under a new name.
+export async function duplicateProject(id, name) {
+  const p = project(id), doc = await getDoc(id);
+  if (!p || !doc) return null;
+  const copy = await createProject({ name, width: p.width, height: p.height, type: p.type });
+  const objs = Object.values(doc.objects).filter((o) => !o.deleted).map(({ updatedAt, ...o }) => o);
+  if (objs.length) await putObjects(copy.id, objs);
+  return copy;
+}
+
 export const removeObjects = (id, ids) => putObjects(id, ids.map((oid) => ({ id: oid, deleted: true })));
 
 // Bring in a document from OneDrive, object by object. Returns true if this

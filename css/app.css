@@ -286,3 +286,4 @@ details.cat[open] .cat-name .caret { transform: rotate(90deg); }
 .row3 label { margin-bottom: .4rem; }
 .pack-type { margin: 0; gap: .5rem; white-space: nowrap; }
 .pack-type select { width: auto; min-height: 34px; padding: .2em .5em; }
+.row { display: grid; grid-template-columns: 1fr 1fr; gap: .7rem; }

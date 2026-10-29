@@ -132,6 +132,9 @@ function projectMenu(id) {
   if (!p) return;
   return modal(p.name, `<form class="form">
       <label>Name<input name="name" required maxlength="120" value="${esc(p.name)}"></label>
+      <p class="small muted">${p.type ? `${typeLabel(p.type)} · ` : ''}${p.width} × ${p.height} pixels</p>
+      <div class="actions left"><button type="button" class="btn small" data-size>${icon('corners-out')} Change size…</button>
+        <button type="button" class="btn small" data-dup>${icon('plus-circle')} Duplicate</button></div>
       <div class="actions"><button type="button" class="btn danger" data-del>${icon('trash')} Delete</button><span class="spacer"></span>
         <button type="button" class="btn quiet" data-cancel>Cancel</button><button class="btn primary">Save</button></div>
     </form>`, {
@@ -144,12 +147,54 @@ function projectMenu(id) {
         toast('Map deleted');
         state.route();
       };
+      $('[data-dup]', m).onclick = async () => {
+        close(null);
+        const copy = await store.duplicateProject(id, `${p.name} (copy)`);
+        if (copy) { toast('Map duplicated'); state.route(); }
+      };
+      $('[data-size]', m).onclick = () => { close(null); sizeDialog(id); };
       $('form', m).onsubmit = async (e) => {
         e.preventDefault();
         const name = e.target.name.value.trim();
         if (!name) return;
         await store.saveProject({ ...store.project(id), name });
         close(null);
+        state.route();
+      };
+    },
+  });
+}
+
+// Change a map's size: scale everything (a sharper or lighter map, same
+// picture), or change the canvas around the content, which stays centred.
+function sizeDialog(id) {
+  const p = store.project(id);
+  if (!p) return;
+  const scales = [0.25, 0.5, 0.75, 1.5, 2].filter((k) => Math.max(p.width, p.height) * k <= MAX_SIDE && Math.min(p.width, p.height) * k >= 256);
+  return modal('Change size', `<form class="form">
+      <p class="muted small">Now ${p.width} × ${p.height} pixels.</p>
+      <label class="check"><input type="radio" name="how" value="scale" checked> <b>Scale everything</b> <small>same picture, more or fewer pixels</small></label>
+      <select name="k">${scales.map((k) => `<option value="${k}" ${k === 2 ? 'selected' : ''}>${Math.round(k * 100)}% · ${Math.round(p.width * k)} × ${Math.round(p.height * k)}</option>`).join('')}</select>
+      <label class="check" style="margin-top:1rem"><input type="radio" name="how" value="canvas"> <b>Change the canvas</b> <small>more or less room around the map; the content stays the same size, centred</small></label>
+      <div class="row"><label>Width<input type="number" name="w" min="256" max="${MAX_SIDE}" value="${p.width}"></label><label>Height<input type="number" name="h" min="256" max="${MAX_SIDE}" value="${p.height}"></label></div>
+      <div class="actions"><button type="button" class="btn quiet" data-cancel>Cancel</button><button class="btn primary">Change size</button></div>
+    </form>`, {
+    onMount: (m, close) => {
+      $('[data-cancel]', m).onclick = () => close(null);
+      $('form', m).onsubmit = async (e) => {
+        e.preventDefault();
+        const f = e.target;
+        let opts;
+        if (f.how.value === 'scale') {
+          const k = +f.k.value;
+          opts = { width: p.width * k, height: p.height * k, k };
+        } else {
+          const w = Math.max(256, Math.min(MAX_SIDE, +f.w.value || p.width)), h = Math.max(256, Math.min(MAX_SIDE, +f.h.value || p.height));
+          opts = { width: w, height: h, dx: Math.round((w - p.width) / 2), dy: Math.round((h - p.height) / 2) };
+        }
+        close(null);
+        await store.resizeProject(id, opts);
+        toast(`Now ${Math.round(opts.width)} × ${Math.round(opts.height)}`);
         state.route();
       };
     },

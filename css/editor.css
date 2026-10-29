@@ -146,3 +146,8 @@ body.editing { overflow: hidden; overscroll-behavior: none; }
 .pk-search { min-height: 34px; padding: .3em .6em; font-size: .9rem; }
 .pk-found { margin: 0; }
 .pk-grid > p { grid-column: 1 / -1; }
+.ink-custom { width: 26px; height: 26px; min-height: 0; padding: 0; border: 2px solid var(--ink-2); border-radius: 50%; overflow: hidden; cursor: pointer; box-shadow: 0 0 0 1px var(--rule-strong); }
+.ink-custom.on { box-shadow: 0 0 0 2px var(--brass); }
+.ink-custom::-webkit-color-swatch-wrapper { padding: 0; }
+.ink-custom::-webkit-color-swatch { border: 0; border-radius: 50%; }
+.toolbar .pen-opacity, .toolbar .pen-soft { width: 72px; min-height: 0; padding: 0; flex-shrink: 0; accent-color: var(--rubric); background: transparent; border: 0; }

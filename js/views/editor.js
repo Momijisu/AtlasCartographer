@@ -20,7 +20,7 @@ const TOOLS = [
   ['terrain', 'feather', 'Terrain: paint textures onto the land (G)'],
   ['text', 'text-b', 'Text: click to add a label, or click one to edit it (T)'],
   ['path', 'path', 'Paths: roads, trails, rivers and borders (P)'],
-  ['pen', 'pencil-line', 'Ink pen (B)'],
+  ['pen', 'pencil-line', 'Pen and colour brush (B)'],
   ['eraser', 'x', 'Eraser (E)'],
   ['stamp', 'mountains', 'Stamp: place art from the library (S)'],
   ['scatter', 'tree-evergreen', 'Scatter: paint many stamps at once (R)'],
@@ -70,11 +70,17 @@ export async function viewEditor(view, id) {
           <span class="seg path-style">${Object.entries(PATHS).map(([k, [name]]) => `<button type="button" data-pathstyle="${k}">${name}</button>`).join('')}</span>
           <input type="range" class="path-width" min="2" max="160" step="1" title="Width ([ and ])" aria-label="Path width">
         </span>
-        <span class="tb-group" data-for="pen"><span class="swatches">${INKS.map((c) => `<button class="swatch" data-ink="${c}" style="--c:${c}" aria-label="Ink ${c}"></button>`).join('')}</span></span>
-        <span class="tb-group" data-for="pen eraser"><input type="range" class="width" min="2" max="80" step="1" title="Size ([ and ])" aria-label="Pen size"></span>
+        <span class="tb-group" data-for="pen"><span class="swatches">${INKS.map((c) => `<button class="swatch" data-ink="${c}" style="--c:${c}" aria-label="Ink ${c}"></button>`).join('')}
+          <input type="color" class="ink-custom" title="Any colour" aria-label="Any colour"></span></span>
+        <span class="tb-group" data-for="pen eraser"><input type="range" class="width" min="0" max="100" step="1" title="Size ([ and ])" aria-label="Pen size"></span>
+        <span class="tb-group" data-for="pen">
+          <input type="range" class="pen-opacity" min="5" max="100" step="5" title="Opacity: lower lets the map show through" aria-label="Opacity">
+          <input type="range" class="pen-soft" min="0" max="100" step="5" title="Soft edges" aria-label="Soft edges">
+        </span>
         <span class="tb-group" data-for="stamp scatter">
           <button class="brush-chip" data-act="picker" title="Choose art" aria-label="Choose art"></button>
           <input type="range" class="stamp-size" min="0" max="100" step="1" title="Stamp size ([ and ])" aria-label="Stamp size">
+          <button class="tool scatter-only" data-act="scatter-settings" title="Scatter settings: spacing, spread, size and rotation" aria-label="Scatter settings">${icon('gear-six')}</button>
         </span>
         <span class="tb-group" data-for="select">
           <button class="tool" data-act="duplicate" title="Duplicate (Ctrl+D)" aria-label="Duplicate">${icon('plus-circle')}</button>
@@ -95,6 +101,7 @@ export async function viewEditor(view, id) {
       <div class="layers-panel side-panel" hidden></div>
       <div class="style-panel side-panel" hidden></div>
       <div class="adjust-panel side-panel" hidden></div>
+      <div class="scatter-panel side-panel" hidden></div>
     </div>`;
   const ed = new Editor(view.querySelector('.editor'), project, doc);
   state.cleanup = () => ed.destroy();
@@ -128,7 +135,13 @@ class Editor {
     if (!TOOLS.some(([t]) => t === this.tool)) this.tool = 'pen';
     this.ink = load('ac.ink', INKS[0]);
     this.width = load('ac.width', 8);
+    this.penOpacity = load('ac.penOpacity', 1);
+    this.penSoft = load('ac.penSoft', 0);
     this.stampSize = load('ac.stampSize', 256);
+    // Scatter brush: gap between stamps and how far they stray (both as a
+    // share of the stamp size), size variation (±), random turn (share of
+    // half a turn), and random mirroring.
+    this.scatter = { spacing: 0.6, spread: 0.5, vary: 0.2, rotate: 0, flip: true, ...load('ac.scatter', {}) };
     this.landSize = load('ac.landSize', 256);
     this.landMode = load('ac.landMode', 'add');
     this.pathStyle = load('ac.pathStyle', 'road');
@@ -405,15 +418,14 @@ class Editor {
 
   // A new stamp from the brush (a random pick when it holds several), its
   // longer side `size` map pixels.
-  newStamp(mx, my, size, { jitter = false } = {}) {
+  newStamp(mx, my, size, { flip = false, rot = 0 } = {}) {
     const ids = this.brush.filter((id) => A.asset(id));
     if (!ids.length) return null;
     const a = A.asset(ids[Math.floor(Math.random() * ids.length)]);
     const k = size / Math.max(a.w, a.h, 1);
     return {
       id: uid(), kind: 'stamp', asset: a.id, ...this.layerField(),
-      x: r1(mx), y: r1(my), w: r1(a.w * k), h: r1(a.h * k), rot: 0,
-      flip: jitter ? Math.random() < 0.5 : false,
+      x: r1(mx), y: r1(my), w: r1(a.w * k), h: r1(a.h * k), rot: Math.round(rot * 1000) / 1000, flip,
     };
   }
 
@@ -542,7 +554,11 @@ class Editor {
     for (const b of $$('[data-tool]', this.root)) b.classList.toggle('on', b.dataset.tool === this.tool);
     for (const b of $$('[data-ink]', this.root)) b.classList.toggle('on', b.dataset.ink === this.ink);
     for (const g of $$('.tb-group', this.root)) g.hidden = !g.dataset.for.split(' ').includes(this.tool);
-    $('.width', this.root).value = this.width;
+    $('.width', this.root).value = penSlider(this.width);
+    $('.pen-opacity', this.root).value = Math.round(this.penOpacity * 100);
+    $('.pen-soft', this.root).value = Math.round(this.penSoft * 100);
+    $('.ink-custom', this.root).value = this.ink;
+    $('.ink-custom', this.root).classList.toggle('on', !INKS.includes(this.ink));
     $('.stamp-size', this.root).value = sliderFromSize(this.stampSize);
     $('.land-size', this.root).value = sliderFromSize(this.landSize);
     $('.terrain-size', this.root).value = sliderFromSize(this.terrainSize);
@@ -555,6 +571,7 @@ class Editor {
     for (const b of $$('[data-for="select"] button', this.root)) b.disabled = !all.length;
     $('[data-act="edit-text"]', this.root).hidden = sel?.kind !== 'label';
     $('[data-act="flip"]', this.root).hidden = !all.some((o) => o.kind === 'stamp');
+    $('.scatter-only', this.root).hidden = this.tool !== 'scatter';
     const adjustable = all.some((o) => o.kind === 'stamp' || o.kind === 'path');
     $('[data-act="adjust"]', this.root).hidden = !adjustable;
     if (!adjustable) $('.adjust-panel', this.root).hidden = true;
@@ -761,6 +778,31 @@ class Editor {
       toStamps(t.name === 'tint' && !(o.tintAmt > 0) ? { tint: v, tintAmt: 0.5 } : { [t.name]: v });
     };
     $('[data-reset]', el)?.addEventListener('click', () => toStamps({ opacity: 1, tintAmt: 0, bright: 0 }));
+  }
+
+  // Scatter brush settings (this device's, like the other brush settings).
+  renderScatter() {
+    const el = $('.scatter-panel', this.root);
+    if (!el || el.hidden) return;
+    const sc = this.scatter;
+    el.innerHTML = `<header><b>Scatter</b><button class="icon-btn" data-close aria-label="Close">${icon('x')}</button></header>
+      <div class="style-body">
+        <label>Spacing <small>sparse to dense</small><input type="range" name="spacing" min="0.15" max="2" step="0.05" value="${2.15 - sc.spacing}"></label>
+        <label>Spread <small>how far from the line</small><input type="range" name="spread" min="0" max="2" step="0.05" value="${sc.spread}"></label>
+        <label>Size variation<input type="range" name="vary" min="0" max="0.6" step="0.05" value="${sc.vary}"></label>
+        <label>Random rotation<input type="range" name="rotate" min="0" max="1" step="0.05" value="${sc.rotate}"></label>
+        <label class="check"><input type="checkbox" name="flip" ${sc.flip ? 'checked' : ''}> Mirror some at random</label>
+        <button class="btn small quiet" data-reset>Reset</button>
+      </div>`;
+    $('[data-close]', el).onclick = () => { el.hidden = true; };
+    el.oninput = (e) => {
+      const t = e.target;
+      if (!t.name) return;
+      // The spacing slider runs from sparse (left) to dense (right).
+      sc[t.name] = t.type === 'checkbox' ? t.checked : t.name === 'spacing' ? Math.round((2.15 - +t.value) * 100) / 100 : +t.value;
+      keep('ac.scatter', sc);
+    };
+    $('[data-reset]', el).onclick = () => { this.scatter = { spacing: 0.6, spread: 0.5, vary: 0.2, rotate: 0, flip: true }; keep('ac.scatter', this.scatter); this.renderScatter(); };
   }
 
   // Map style: colours and coast, saved with the map (and undoable).
@@ -1013,10 +1055,14 @@ class Editor {
       else if (act === 'style') this.togglePanel('.style-panel', () => this.renderStylePanel());
       else if (act === 'adjust') this.togglePanel('.adjust-panel', () => this.renderAdjust());
       else if (act === 'terrain-picker') this.togglePicker('terrain');
+      else if (act === 'scatter-settings') this.togglePanel('.scatter-panel', () => this.renderScatter());
     };
     $('.toolbar', this.root).onclick = onBar;
     $('.toolrail', this.root).onclick = onBar;
-    $('.width', this.root).oninput = (e) => { this.width = +e.target.value; keep('ac.width', this.width); };
+    $('.width', this.root).oninput = (e) => { this.width = penWidth(+e.target.value); keep('ac.width', this.width); };
+    $('.pen-opacity', this.root).oninput = (e) => { this.penOpacity = +e.target.value / 100; keep('ac.penOpacity', this.penOpacity); };
+    $('.pen-soft', this.root).oninput = (e) => { this.penSoft = +e.target.value / 100; keep('ac.penSoft', this.penSoft); };
+    $('.ink-custom', this.root).oninput = (e) => { this.ink = e.target.value; keep('ac.ink', this.ink); this.syncToolbar(); };
     $('.stamp-size', this.root).oninput = (e) => { this.stampSize = sizeFromSlider(+e.target.value); keep('ac.stampSize', this.stampSize); };
     $('.land-size', this.root).oninput = (e) => { this.landSize = sizeFromSlider(+e.target.value); keep('ac.landSize', this.landSize); };
     $('.path-width', this.root).oninput = (e) => { this.pathWidth = +e.target.value; keep('ac.pathWidth', this.pathWidth); };
@@ -1098,7 +1144,7 @@ class Editor {
         this.terrainSize = Math.max(16, Math.min(2048, Math.round(this.terrainSize * (up ? 1.15 : 1 / 1.15))));
         keep('ac.terrainSize', this.terrainSize);
       } else {
-        this.width = Math.max(2, Math.min(80, this.width + (up ? 2 : -2)));
+        this.width = Math.max(2, Math.min(800, Math.round(this.width * (up ? 1.2 : 1 / 1.2))));
         keep('ac.width', this.width);
       }
       this.syncToolbar();
@@ -1137,7 +1183,7 @@ class Editor {
       if (hit) { this.editLabel(hit); return; }
       this.gesture = { kind: 'textpath', points: [r1(mx), r1(my)] };
     } else if (this.tool === 'pen') {
-      this.gesture = { kind: 'draw', stroke: { id: uid(), kind: 'stroke', ...this.layerField(), color: this.ink, width: this.width, points: [r1(mx), r1(my)] } };
+      this.gesture = { kind: 'draw', stroke: { id: uid(), kind: 'stroke', ...this.layerField(), color: this.ink, width: this.width, ...(this.penOpacity < 1 ? { opacity: this.penOpacity } : {}), ...(this.penSoft > 0 ? { soft: this.penSoft } : {}), points: [r1(mx), r1(my)] } };
     } else if (this.tool === 'eraser') {
       this.gesture = { kind: 'erase', erased: new Map() };
       this.eraseAt(pt);
@@ -1341,13 +1387,16 @@ class Editor {
   // Scatter: drop stamps along the drag, spaced by their size, each nudged,
   // resized a little and sometimes mirrored, so they don't look stamped.
   scatterAt(mx, my) {
-    const g = this.gesture;
-    const spacing = this.stampSize * 0.6;
+    const g = this.gesture, sc = this.scatter;
+    const spacing = this.stampSize * sc.spacing;
     if (g.last && Math.hypot(mx - g.last[0], my - g.last[1]) < spacing) return;
     g.last = [mx, my];
-    const r = this.stampSize * 0.5;
+    const r = this.stampSize * sc.spread;
     const a = Math.random() * Math.PI * 2, d = Math.sqrt(Math.random()) * r;
-    const o = this.newStamp(mx + Math.cos(a) * d, my + Math.sin(a) * d, this.stampSize * (0.8 + Math.random() * 0.4), { jitter: true });
+    const o = this.newStamp(mx + Math.cos(a) * d, my + Math.sin(a) * d, this.stampSize * (1 + (Math.random() * 2 - 1) * sc.vary), {
+      flip: sc.flip && Math.random() < 0.5,
+      rot: (Math.random() * 2 - 1) * sc.rotate * Math.PI,
+    });
     if (!o) return;
     o.z = this.nextZ();
     this.doc.objects[o.id] = o;
@@ -1475,3 +1524,7 @@ const recent = (kind) => load(`ac.recent.${kind}`, []);
 function useRecent(kind, ids) {
   keep(`ac.recent.${kind}`, [...ids, ...recent(kind).filter((x) => !ids.includes(x))].slice(0, 60));
 }
+
+// Pen sizes from 2 to 800 map pixels on a curve: fine lines and broad washes.
+const penWidth = (v) => Math.round(2 * Math.pow(400, v / 100));
+const penSlider = (w) => Math.round(100 * Math.log(Math.max(2, w) / 2) / Math.log(400));

@@ -17,9 +17,30 @@ export const STYLE = {
 };
 
 // Strokes are flat [x0, y0, x1, y1, …] point lists in map pixels.
+// opacity (0…1) makes them see-through, and soft (0…1) feathers their edges,
+// for painting regions and shading as well as drawing lines. A stroke is one
+// shape, so it never darkens where it crosses itself.
 export function drawStroke(ctx, o) {
-  ctx.strokeStyle = ctx.fillStyle = o.color;
-  strokePath(ctx, o.points, o.width);
+  const a = o.opacity ?? 1;
+  if (!(o.soft > 0)) {
+    ctx.save();
+    ctx.globalAlpha = a;
+    ctx.strokeStyle = ctx.fillStyle = o.color;
+    strokePath(ctx, o.points, o.width);
+    ctx.restore();
+    return;
+  }
+  // Feathered: the canvas-shadow trick (see softStroke), in the stroke's colour.
+  const m = ctx.getTransform(), k = Math.hypot(m.a, m.b);
+  ctx.save();
+  ctx.globalAlpha = a;
+  ctx.fillStyle = ctx.strokeStyle = '#000';
+  ctx.shadowColor = o.color;
+  ctx.shadowBlur = Math.min(120, o.soft * o.width * 0.5 * k);
+  ctx.shadowOffsetX = FAR;
+  ctx.translate(-FAR / k, 0);
+  strokePath(ctx, o.points, o.width * (1 - o.soft * 0.4));
+  ctx.restore();
 }
 
 // A smoothed polyline of the given width (a dot for a single point).
