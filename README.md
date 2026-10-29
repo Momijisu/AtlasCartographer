@@ -14,7 +14,7 @@ Early. What works today:
 - Terrain: paint any library texture onto the land (grass, forest floor, sand…) with soft edges; it stops at the coast. Paint "Base land" to take it back off
 - Paths: roads (dashed), trails (dotted), borders (dash-dot), and rivers that widen towards the mouth
 - Map style: sea, land and coastline colours, coastline width, how many ripples, and shadows under stamps
-- Stamps from the art library: place one, or paint many with the scatter brush (randomly chosen from the pictures you pick, nudged, resized and mirrored a little, overlapping front to back). Select a stamp to move, scale (corners), rotate (top handle; Shift snaps to 15°), flip, bring forward, send back or delete
+- Stamps from the art library: place one, or paint many with the scatter brush (randomly chosen from the pictures you pick, nudged, resized and mirrored a little, overlapping front to back). Select a stamp to move, scale (corners), rotate (top handle; Shift snaps to 15°), flip, bring forward, send back or delete. Drag a box (or Shift-click) to select several; duplicate, copy and paste, also between maps
 - Labels: straight or curved text in six fonts, with colour, letter spacing, capitals and a soft outline. Move, rotate and resize them like stamps; Enter or a double-click edits
 - Layers: Labels, Stamps, Ink and paths, and Land and sea. Hide one (saved with the map, and left out of exports) or lock it on this device so it can't be selected or erased. Labels always sit on top
 - Export as PNG, WebP or JPEG, at full size or smaller, with every stamp's full-size art (ready to upload to WorldAtlas Maps)
@@ -25,7 +25,6 @@ Early. What works today:
 
 Planned:
 
-- Select several things at once; duplicate, copy and paste
 - Overlays and finishing: paper texture, grids, frames, compass roses, scale bars
 - Tinting stamps
 
@@ -42,6 +41,8 @@ Planned:
 | [ ] | smaller / larger (or send back / bring forward) | F | flip |
 | Del | delete | 0 | fit the map |
 | Ctrl+Z | undo | Ctrl+Shift+Z | redo |
+| Ctrl+A | select all | Ctrl+D | duplicate |
+| Ctrl+C / X / V | copy, cut, paste | Esc | clear the selection |
 
 ## Art assets
 

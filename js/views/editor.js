@@ -75,6 +75,7 @@ export async function viewEditor(view, id) {
           <input type="range" class="stamp-size" min="0" max="100" step="1" title="Stamp size ([ and ])" aria-label="Stamp size">
         </span>
         <span class="tb-group" data-for="select">
+          <button class="tool" data-act="duplicate" title="Duplicate (Ctrl+D)" aria-label="Duplicate">${icon('plus-circle')}</button>
           <button class="tool" data-act="edit-text" title="Edit the text (Enter)" aria-label="Edit the text">${icon('pencil-simple')}</button>
           <button class="tool" data-act="flip" title="Flip (F)" aria-label="Flip">${icon('arrows-clockwise')}</button>
           <button class="tool" data-act="front" title="Bring to front (])" aria-label="Bring to front">${icon('arrow-up')}</button>
@@ -135,7 +136,7 @@ class Editor {
     this.locked = new Set(load(`ac.locked.${project.id}`, [])); // layers this device won't edit
     this.brush = load('ac.brush', []).filter((id) => A.asset(id)); // asset ids to stamp with
     this.multi = load('ac.multi', false);
-    this.selected = null;
+    this.sel = new Set(); // selected stamps and labels
     this.undoStack = []; this.redoStack = [];
     this.pointers = new Map();
     this.gesture = null;
@@ -229,8 +230,35 @@ class Editor {
       strokePath(ctx, g.stroke.points, g.stroke.width);
     }
     ctx.restore();
-    const sel = this.selectedObj();
-    if (sel) this.paintSelection(sel);
+    const sel = this.selectedObjs();
+    if (sel.length === 1) this.paintSelection(sel[0]);
+    else for (const o of sel) this.paintOutline(o);
+    if (g?.kind === 'marquee') {
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      const [ax, ay] = this.toScreen(...g.a), [bx, by] = this.toScreen(...g.b);
+      ctx.fillStyle = 'rgba(196, 85, 59, .08)';
+      ctx.strokeStyle = '#c4553b';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 3]);
+      ctx.fillRect(Math.min(ax, bx), Math.min(ay, by), Math.abs(bx - ax), Math.abs(by - ay));
+      ctx.strokeRect(Math.min(ax, bx), Math.min(ay, by), Math.abs(bx - ax), Math.abs(by - ay));
+      ctx.setLineDash([]);
+    }
+  }
+
+  // Just the dashed box, for each item of a multiple selection.
+  paintOutline(o) {
+    const { ctx, dpr } = this;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const c = this.corners(o).map((p) => this.toScreen(...p));
+    ctx.strokeStyle = '#c4553b';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([5, 4]);
+    ctx.beginPath();
+    c.forEach((p, i) => (i ? ctx.lineTo(...p) : ctx.moveTo(...p)));
+    ctx.closePath();
+    ctx.stroke();
+    ctx.setLineDash([]);
   }
 
   // Selection outline with corner handles (scale) and a handle above (rotate).
@@ -256,11 +284,22 @@ class Editor {
 
   // --- stamps -----------------------------------------------------------
 
-  selectedObj() {
-    const o = this.selected && this.doc.objects[this.selected];
-    if (!o || o.deleted) { this.selected = null; return null; }
-    return o;
+  // The selection, minus anything deleted meanwhile (here or on another device).
+  selectedObjs() {
+    const out = [];
+    for (const id of this.sel) {
+      const o = this.doc.objects[id];
+      if (o && !o.deleted) out.push(o); else this.sel.delete(id);
+    }
+    return out;
   }
+
+  // The selected object when exactly one is selected.
+  selectedObj() { const l = this.selectedObjs(); return l.length === 1 ? l[0] : null; }
+
+  select(ids) { this.sel = new Set(ids); }
+
+  selectable() { return store.liveObjects(this.doc).filter((o) => (o.kind === 'stamp' || o.kind === 'label') && this.editable(layerOf(o))); }
 
   // Stamps and labels can be selected and transformed; this is their box.
   box(o) {
@@ -351,19 +390,55 @@ class Editor {
   }
   nextZ() { return this.zRange()[1] + 1; }
 
-  // Change the selected stamp (one undo step).
+  // Change everything selected (one undo step). patch: fields, or
+  // (object, index) → fields.
   editSelected(patch) {
-    const o = this.selectedObj();
-    if (!o) return;
-    this.commit({ undo: [clean(o)], redo: [{ ...clean(o), ...patch }] });
+    const objs = this.selectedObjs().sort((a, b) => (a.z || 0) - (b.z || 0));
+    if (!objs.length) return;
+    this.commit({ undo: objs.map(clean), redo: objs.map((o, i) => ({ ...clean(o), ...(typeof patch === 'function' ? patch(o, i) : patch) })) });
   }
 
+  // Layer order keeps the selection's own order among itself.
+  toFront() { const z = this.nextZ(); this.editSelected((o, i) => ({ z: z + i })); }
+  toBack() { const objs = this.selectedObjs(); const z = this.zRange()[0] - objs.length; this.editSelected((o, i) => ({ z: z + i })); }
+  flipSelected() { this.editSelected((o) => (o.kind === 'stamp' ? { flip: !o.flip } : {})); }
+
   deleteSelected() {
-    const o = this.selectedObj();
-    if (!o) return;
-    this.selected = null;
-    this.commit({ undo: [clean(o)], redo: [{ id: o.id, deleted: true }] });
+    const objs = this.selectedObjs();
+    if (!objs.length) return;
+    this.sel.clear();
+    this.commit({ undo: objs.map(clean), redo: objs.map((o) => ({ id: o.id, deleted: true })) });
     this.syncToolbar();
+  }
+
+  copySelected() {
+    const objs = this.selectedObjs();
+    if (!objs.length) return false;
+    clipboard = objs.sort((a, b) => (a.z || 0) - (b.z || 0)).map(clean);
+    return true;
+  }
+
+  // Add copies of objs, moved by (dx, dy), on top, and select them.
+  async addCopies(objs, dx, dy) {
+    const z = this.nextZ();
+    const copies = objs.map((o, i) => ({ ...o, id: uid(), x: r1(o.x + dx), y: r1(o.y + dy), z: z + i }));
+    this.select(copies.map((o) => o.id));
+    if (this.tool !== 'select') this.setTool('select');
+    await this.commit({ undo: copies.map((o) => ({ id: o.id, deleted: true })), redo: copies });
+    this.syncToolbar();
+  }
+
+  duplicateSelected() {
+    const objs = this.selectedObjs().sort((a, b) => (a.z || 0) - (b.z || 0)).map(clean);
+    if (objs.length) this.addCopies(objs, 30 / this.s, 30 / this.s);
+  }
+
+  // Paste in the middle of the view (from this map or another).
+  paste() {
+    if (!clipboard?.length) return;
+    const xs = clipboard.map((o) => o.x), ys = clipboard.map((o) => o.y);
+    const [cx, cy] = this.toMap(this.vw / 2, this.vh / 2);
+    this.addCopies(clipboard, cx - (Math.min(...xs) + Math.max(...xs)) / 2, cy - (Math.min(...ys) + Math.max(...ys)) / 2);
   }
 
   // Strokes and stamps under a point, within the eraser's radius (map pixels).
@@ -387,7 +462,7 @@ class Editor {
   setTool(t) {
     this.tool = t;
     keep('ac.tool', t);
-    if (t !== 'select') this.selected = null;
+    if (t !== 'select') this.sel.clear();
     if ((t === 'stamp' || t === 'scatter') && !this.brush.length) this.openPicker();
     this.syncToolbar();
     this.redraw();
@@ -406,10 +481,10 @@ class Editor {
     for (const b of $$('[data-pathstyle]', this.root)) b.classList.toggle('on', b.dataset.pathstyle === this.pathStyle);
     $('.terrain-soft', this.root).value = Math.round(this.terrainSoft * 100);
     for (const b of $$('[data-landmode]', this.root)) b.classList.toggle('on', b.dataset.landmode === this.landMode);
-    const sel = this.selectedObj();
-    for (const b of $$('[data-for="select"] button', this.root)) b.disabled = !sel;
+    const all = this.selectedObjs(), sel = all.length === 1 ? all[0] : null;
+    for (const b of $$('[data-for="select"] button', this.root)) b.disabled = !all.length;
     $('[data-act="edit-text"]', this.root).hidden = sel?.kind !== 'label';
-    $('[data-act="flip"]', this.root).hidden = sel?.kind === 'label';
+    $('[data-act="flip"]', this.root).hidden = !all.some((o) => o.kind === 'stamp');
     this.canvas.style.cursor = panning ? (this.gesture?.kind === 'pan' ? 'grabbing' : 'grab') : this.tool === 'select' ? 'default' : 'crosshair';
     this.renderChip();
   }
@@ -477,14 +552,14 @@ class Editor {
   setHidden(kind, hide) {
     const h = this.hidden();
     if (hide) h.add(kind); else h.delete(kind);
-    if (hide && this.selectedObj() && layerOf(this.selectedObj()) === kind) this.selected = null;
+    if (hide) for (const o of this.selectedObjs()) if (layerOf(o) === kind) this.sel.delete(o.id);
     return this.setStyle({ hidden: [...h] }).then(() => { this.renderLayers(); this.syncToolbar(); });
   }
 
   setLocked(kind, lock) {
     if (lock) this.locked.add(kind); else this.locked.delete(kind);
     keep(`ac.locked.${this.project.id}`, [...this.locked]);
-    if (lock && this.selectedObj()?.kind === kind) this.selected = null;
+    if (lock) for (const o of this.selectedObjs()) if (layerOf(o) === kind) this.sel.delete(o.id);
     this.renderLayers(); this.syncToolbar(); this.redraw();
   }
 
@@ -627,7 +702,7 @@ class Editor {
     if (!v?.text) return;
     const o = { id: uid(), kind: 'label', x: r1(mx), y: r1(my), rot: 0, z: this.nextZ(), ...v };
     this.rememberStyle(v);
-    this.selected = o.id;
+    this.select([o.id]);
     if (this.tool !== 'text') this.setTool('select');
     await this.commit({ undo: [{ id: o.id, deleted: true }], redo: [o] });
     this.syncToolbar();
@@ -637,9 +712,9 @@ class Editor {
     if (!o) return;
     const v = await labelDialog(clean(o), 'Edit label');
     if (!v) return;
-    if (!v.text) { this.selected = o.id; this.deleteSelected(); return; }
+    if (!v.text) { this.select([o.id]); this.deleteSelected(); return; }
     this.rememberStyle(v);
-    this.selected = o.id;
+    this.select([o.id]);
     await this.commit({ undo: [clean(o)], redo: [{ ...clean(o), ...v }] });
     this.syncToolbar();
   }
@@ -664,9 +739,10 @@ class Editor {
       else if (act === 'fit') this.fit();
       else if (act === 'picker') this.togglePicker('stamp');
       else if (act === 'textures') this.togglePicker('texture');
-      else if (act === 'flip') this.editSelected({ flip: !this.selectedObj()?.flip });
-      else if (act === 'front') this.editSelected({ z: this.nextZ() });
-      else if (act === 'back') this.editSelected({ z: this.zRange()[0] - 1 });
+      else if (act === 'flip') this.flipSelected();
+      else if (act === 'front') this.toFront();
+      else if (act === 'back') this.toBack();
+      else if (act === 'duplicate') this.duplicateSelected();
       else if (act === 'delete') this.deleteSelected();
       else if (act === 'edit-text') this.editLabel(this.selectedObj());
       else if (act === 'layers') this.togglePanel('.layers-panel', () => this.renderLayers());
@@ -715,19 +791,24 @@ class Editor {
     const k = e.key.toLowerCase();
     if (mod && k === 'z') { e.preventDefault(); if (e.shiftKey) this.redo(); else this.undo(); return; }
     if (mod && k === 'y') { e.preventDefault(); this.redo(); return; }
+    if (mod && k === 'c') { if (this.copySelected()) e.preventDefault(); return; }
+    if (mod && k === 'x') { if (this.copySelected()) { e.preventDefault(); this.deleteSelected(); } return; }
+    if (mod && k === 'v') { if (clipboard?.length) { e.preventDefault(); this.paste(); } return; }
+    if (mod && k === 'd') { e.preventDefault(); this.duplicateSelected(); return; }
+    if (mod && k === 'a') { e.preventDefault(); this.select(this.selectable().map((o) => o.id)); if (this.tool !== 'select') this.setTool('select'); this.syncToolbar(); this.redraw(); return; }
     if (mod) return;
     if (e.key === ' ') { e.preventDefault(); if (!this.spaceDown) { this.spaceDown = true; this.syncToolbar(); } return; }
-    const sel = this.selectedObj();
-    if (sel && (e.key === 'Delete' || e.key === 'Backspace')) { e.preventDefault(); this.deleteSelected(); return; }
+    const any = this.selectedObjs().length > 0, sel = this.selectedObj();
+    if (any && (e.key === 'Delete' || e.key === 'Backspace')) { e.preventDefault(); this.deleteSelected(); return; }
     if (sel?.kind === 'label' && e.key === 'Enter') { e.preventDefault(); this.editLabel(sel); return; }
-    if (e.key === 'Escape') { this.selected = null; $('.picker', this.root).hidden = true; this.syncToolbar(); this.redraw(); return; }
+    if (e.key === 'Escape') { this.sel.clear(); this.closePanels(); this.syncToolbar(); this.redraw(); return; }
     if (KEYS[k]) this.setTool(KEYS[k]);
     else if (k === '0') this.fit();
     else if (k === '+' || k === '=') this.zoomAt(this.vw / 2, this.vh / 2, 1.25);
     else if (k === '-') this.zoomAt(this.vw / 2, this.vh / 2, 0.8);
-    else if (sel && k === 'f') this.editSelected({ flip: !sel.flip });
-    else if (sel && k === ']') this.editSelected({ z: this.nextZ() });
-    else if (sel && k === '[') this.editSelected({ z: this.zRange()[0] - 1 });
+    else if (any && k === 'f') this.flipSelected();
+    else if (any && k === ']') this.toFront();
+    else if (any && k === '[') this.toBack();
     else if (k === '[' || k === ']') {
       const up = k === ']';
       if (this.tool === 'stamp' || this.tool === 'scatter') {
@@ -788,7 +869,7 @@ class Editor {
       this.gesture = { kind: 'erase', erased: new Map() };
       this.eraseAt(pt);
     } else if (this.tool === 'select') {
-      this.gesture = this.selectGesture(pt, mx, my) || { kind: 'pan', last: pt };
+      this.gesture = this.selectGesture(pt, mx, my, e) || { kind: 'pan', last: pt };
     } else if (this.tool === 'stamp') {
       const o = this.newStamp(mx, my, this.stampSize);
       if (!o) { this.openPicker(); toast('Choose some art first'); return; }
@@ -804,8 +885,10 @@ class Editor {
     this.redraw();
   }
 
-  // Grab a handle of the selected stamp, or a stamp under the pointer.
-  selectGesture(pt, mx, my) {
+  // Grab a handle of the selected item, an item under the pointer (Shift adds
+  // or removes it), or start a selection box on empty map. On touch screens
+  // a drag on empty map moves the view instead, as everywhere else.
+  selectGesture(pt, mx, my, e) {
     const sel = this.selectedObj();
     if (sel) {
       const rh = this.rotHandle(sel);
@@ -820,8 +903,17 @@ class Editor {
       }
     }
     const hit = this.objectAt(mx, my);
-    this.selected = hit?.id || null;
-    return hit ? { kind: 'move', id: hit.id, orig: clean(hit), from: [mx, my] } : null;
+    if (hit && e.shiftKey) {
+      if (this.sel.has(hit.id)) this.sel.delete(hit.id); else this.sel.add(hit.id);
+      return { kind: 'noop' };
+    }
+    if (hit) {
+      if (!this.sel.has(hit.id)) this.select([hit.id]);
+      return { kind: 'move', origs: this.selectedObjs().map(clean), from: [mx, my] };
+    }
+    if (e.pointerType === 'touch') { this.sel.clear(); return null; }
+    if (!e.shiftKey) this.sel.clear();
+    return { kind: 'marquee', a: [mx, my], b: [mx, my], base: new Set(this.sel) };
   }
 
   move(e) {
@@ -850,10 +942,17 @@ class Editor {
       p.push(r1(mx), r1(my));
     } else if (g.kind === 'erase') {
       this.eraseAt(pt);
-    } else if (g.kind === 'move' || g.kind === 'place') {
+    } else if (g.kind === 'place') {
       const o = g.orig;
       this.doc.objects[g.id] = { ...this.doc.objects[g.id], x: r1(o.x + mx - g.from[0]), y: r1(o.y + my - g.from[1]) };
+    } else if (g.kind === 'move') {
+      for (const o of g.origs) this.doc.objects[o.id] = { ...this.doc.objects[o.id], x: r1(o.x + mx - g.from[0]), y: r1(o.y + my - g.from[1]) };
       g.moved = true;
+    } else if (g.kind === 'marquee') {
+      g.b = [mx, my];
+      const [x0, x1] = [Math.min(g.a[0], mx), Math.max(g.a[0], mx)], [y0, y1] = [Math.min(g.a[1], my), Math.max(g.a[1], my)];
+      const inside = this.selectable().filter((o) => { const b = this.box(o); return b.cx >= x0 && b.cx <= x1 && b.cy >= y0 && b.cy <= y1; });
+      this.select([...g.base, ...inside.map((o) => o.id)]);
     } else if (g.kind === 'scale') {
       const o = g.orig;
       const k = Math.hypot(mx - o.x, my - o.y) / g.d0;
@@ -887,12 +986,14 @@ class Editor {
       this.commit({ undo: [{ id: stroke.id, deleted: true }], redo: [stroke] });
     } else if (g.kind === 'erase' && g.erased.size) {
       const gone = [...g.erased.values()];
-      if (gone.some((o) => o.id === this.selected)) this.selected = null;
+      for (const o of gone) this.sel.delete(o.id);
       this.commit({ undo: gone.map(clean), redo: gone.map((o) => ({ id: o.id, deleted: true })) });
     } else if (g.kind === 'place') {
       const o = clean(this.doc.objects[g.id]);
       this.commit({ undo: [{ id: o.id, deleted: true }], redo: [o] });
-    } else if ((g.kind === 'move' || g.kind === 'scale' || g.kind === 'rotate') && g.moved) {
+    } else if (g.kind === 'move' && g.moved) {
+      this.commit({ undo: g.origs, redo: g.origs.map((o) => clean(this.doc.objects[o.id])) });
+    } else if ((g.kind === 'scale' || g.kind === 'rotate') && g.moved) {
       this.commit({ undo: [g.orig], redo: [clean(this.doc.objects[g.id])] });
     } else if (g.kind === 'scatter' && g.placed.length) {
       // Stamps lower on the map overlap the ones behind them, like a landscape.
@@ -909,7 +1010,8 @@ class Editor {
   restore(g) {
     if (g.kind === 'place') delete this.doc.objects[g.id];
     else if (g.kind === 'scatter') for (const id of g.placed) delete this.doc.objects[id];
-    else if (g.kind === 'move' || g.kind === 'scale' || g.kind === 'rotate') this.doc.objects[g.id] = { ...this.doc.objects[g.id], ...g.orig };
+    else if (g.kind === 'move') for (const o of g.origs) this.doc.objects[o.id] = { ...this.doc.objects[o.id], ...o };
+    else if (g.kind === 'scale' || g.kind === 'rotate') this.doc.objects[g.id] = { ...this.doc.objects[g.id], ...g.orig };
   }
 
   abandon() {
@@ -957,6 +1059,9 @@ class Editor {
 }
 
 const r1 = (v) => Math.round(v * 10) / 10;
+
+// Copied stamps and labels, for pasting into this map or another.
+let clipboard = null;
 
 // An object as stored, without sync bookkeeping (for undo and redo entries).
 const clean = ({ updatedAt, deleted, ...o }) => o;
