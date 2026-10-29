@@ -66,9 +66,13 @@ addEventListener('beforeinstallprompt', (e) => { state.installPrompt = e; showIn
 if (window.acInstallPrompt) state.installPrompt = window.acInstallPrompt;
 addEventListener('appinstalled', () => { state.installPrompt = null; window.acInstallPrompt = null; showInstallButton(); });
 
+// The browser's install offer can arrive after a page is drawn: show or hide
+// both Install buttons (top bar, and Settings if it's open) whenever it changes.
 function showInstallButton() {
-  const btn = document.getElementById('installTop');
-  if (btn) btn.hidden = !state.installPrompt;
+  for (const id of ['installTop', 'installRow']) {
+    const el = document.getElementById(id);
+    if (el) el.hidden = !state.installPrompt;
+  }
 }
 
 async function promptInstall() {
