@@ -69,14 +69,17 @@ export function drawDoc(ctx, project, doc, { image = () => null, placeholder = f
   ctx.fillStyle = PAPER;
   ctx.fillRect(0, 0, project.width, project.height);
   if (!doc) return;
+  const hidden = new Set(docStyle(doc).hidden || []);
   const objs = liveObjects(doc).sort((a, b) => (a.z || 0) - (b.z || 0));
   const land = objs.filter((o) => o.kind === 'land');
-  if (land.length) ctx.drawImage(landLayer(project, doc, land, landScale, image, cache), 0, 0, project.width, project.height);
+  if (land.length && !hidden.has('land')) ctx.drawImage(landLayer(project, doc, land, landScale, image, cache), 0, 0, project.width, project.height);
   for (const o of objs) {
+    if (hidden.has(o.kind)) continue;
     if (o.kind === 'stroke') drawStroke(ctx, o);
     else if (o.kind === 'stamp') drawStamp(ctx, o, image(o.asset), placeholder);
-    else if (o.kind === 'label') drawLabel(ctx, o);
   }
+  // Labels go on top of everything, so art never covers a name.
+  if (!hidden.has('label')) for (const o of objs) if (o.kind === 'label') drawLabel(ctx, o);
 }
 
 // Render the whole map into a canvas no bigger than maxW × maxH.
@@ -111,6 +114,9 @@ export function editorLandScale(project) {
   const max = d === 'standard' || (d === 'auto' && touchFirst()) ? 2048 : 8192;
   return Math.min(1, max / Math.max(project.width, project.height));
 }
+
+// The map's layers, top to bottom; each holds one kind of object.
+export const LAYERS = [['label', 'Labels'], ['stamp', 'Stamps'], ['stroke', 'Ink'], ['land', 'Land and sea']];
 
 export const docStyle = (doc) => doc?.objects?.style && !doc.objects.style.deleted ? doc.objects.style : {};
 

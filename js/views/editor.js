@@ -9,7 +9,7 @@ import * as images from '../images.js';
 import { $, $$, esc, uid, toast, modal } from '../util.js';
 import { icon } from '../icons.js';
 import { setTitle, state } from '../ui.js';
-import { drawDoc, drawStroke, strokePath, docStyle, STYLE, editorLandScale, labelBox, drawLabel, FONTS, fontCSS } from '../render.js';
+import { drawDoc, drawStroke, strokePath, docStyle, STYLE, editorLandScale, labelBox, drawLabel, FONTS, fontCSS, LAYERS } from '../render.js';
 import { exportDialog } from '../export.js';
 
 const INKS = ['#2b2118', '#6b4a2b', '#2f5d7c', '#3f6b3a', '#8e2f22'];
@@ -23,6 +23,8 @@ const TOOLS = [
   ['stamp', 'mountains', 'Stamp: place art from the library (S)'],
   ['scatter', 'tree-evergreen', 'Scatter: paint many stamps at once (R)'],
 ];
+// The layer each tool draws on.
+const TOOL_LAYER = { land: 'land', pen: 'stroke', stamp: 'stamp', scatter: 'stamp', text: 'label' };
 const KEYS = { h: 'pan', v: 'select', l: 'land', t: 'text', b: 'pen', e: 'eraser', s: 'stamp', r: 'scatter' };
 const HANDLE = 9; // screen pixels
 const ROT_OFFSET = 34;
@@ -72,7 +74,9 @@ export async function viewEditor(view, id) {
         <button class="tool" data-act="undo" title="Undo (Ctrl+Z)" aria-label="Undo">${icon('arrow-counter-clockwise')}</button>
         <button class="tool flip" data-act="redo" title="Redo (Ctrl+Shift+Z)" aria-label="Redo">${icon('arrow-counter-clockwise')}</button>
         <button class="tool" data-act="fit" title="Fit the map (0)" aria-label="Fit the map">${icon('corners-out')}</button>
+        <button class="tool" data-act="layers" title="Layers" aria-label="Layers">${icon('stack')}</button>
       </div>
+      <div class="layers-panel" hidden></div>
     </div>`;
   const ed = new Editor(view.querySelector('.editor'), project, doc);
   state.cleanup = () => ed.destroy();
@@ -83,6 +87,7 @@ export async function viewEditor(view, id) {
     ed.project = p;
     if (e.store === 'docs' && e.id === id) ed.doc = await store.getDoc(id);
     if (e.store === 'assets') { images.retryMissing(); ed.renderPicker(); }
+    ed.renderLayers();
     ed.redraw();
   };
 }
@@ -108,6 +113,7 @@ class Editor {
     this.landSize = load('ac.landSize', 256);
     this.landMode = load('ac.landMode', 'add');
     this.pickerMode = 'stamp'; // or 'texture': what the picker is choosing
+    this.locked = new Set(load(`ac.locked.${project.id}`, [])); // layers this device won't edit
     this.brush = load('ac.brush', []).filter((id) => A.asset(id)); // asset ids to stamp with
     this.multi = load('ac.multi', false);
     this.selected = null;
@@ -265,7 +271,9 @@ class Editor {
 
   // The topmost stamp or label under a map point.
   objectAt(mx, my, kinds = ['stamp', 'label']) {
-    const list = store.liveObjects(this.doc).filter((o) => kinds.includes(o.kind)).sort((a, b) => (b.z || 0) - (a.z || 0));
+    // Labels draw on top, so they're found first.
+    const rank = (o) => (o.kind === 'label' ? 1e12 : 0) + (o.z || 0);
+    const list = store.liveObjects(this.doc).filter((o) => kinds.includes(o.kind) && this.editable(o.kind)).sort((a, b) => rank(b) - rank(a));
     return list.find((o) => this.inBox(o, mx, my)) || null;
   }
 
@@ -337,6 +345,7 @@ class Editor {
   hits([mx, my], radius) {
     const out = [];
     for (const o of store.liveObjects(this.doc)) {
+      if (!this.editable(o.kind)) continue;
       if (o.kind === 'stamp' || o.kind === 'label') { if (this.inBox(o, mx, my, radius)) out.push(o); continue; }
       if (o.kind !== 'stroke') continue;
       const p = o.points, r = radius + o.width / 2;
@@ -390,6 +399,7 @@ class Editor {
   openPicker(mode = 'stamp') {
     this.pickerMode = mode;
     $('.picker', this.root).hidden = false;
+    $('.layers-panel', this.root).hidden = true;
     this.renderPicker();
   }
 
@@ -402,10 +412,58 @@ class Editor {
   // Land texture: a document-wide setting, kept in the 'style' object so it
   // syncs (and undoes) like any other change.
   setLandTexture(id) {
+    this.setStyle({ landTexture: id }).then(() => this.renderChip());
+  }
+
+  setStyle(patch) {
     const old = this.doc.objects.style;
     const base = old && !old.deleted ? clean(old) : { id: 'style', kind: 'style' };
-    this.commit({ undo: [old && !old.deleted ? clean(old) : { id: 'style', deleted: true }], redo: [{ ...base, landTexture: id }] })
-      .then(() => this.renderChip());
+    return this.commit({ undo: [old && !old.deleted ? clean(old) : { id: 'style', deleted: true }], redo: [{ ...base, ...patch }] });
+  }
+
+  // --- layers -----------------------------------------------------------
+
+  hidden() { return new Set(docStyle(this.doc).hidden || []); }
+  editable(kind) { return !this.hidden().has(kind) && !this.locked.has(kind); }
+
+  setHidden(kind, hide) {
+    const h = this.hidden();
+    if (hide) h.add(kind); else h.delete(kind);
+    if (hide && this.selectedObj()?.kind === kind) this.selected = null;
+    return this.setStyle({ hidden: [...h] }).then(() => { this.renderLayers(); this.syncToolbar(); });
+  }
+
+  setLocked(kind, lock) {
+    if (lock) this.locked.add(kind); else this.locked.delete(kind);
+    keep(`ac.locked.${this.project.id}`, [...this.locked]);
+    if (lock && this.selectedObj()?.kind === kind) this.selected = null;
+    this.renderLayers(); this.syncToolbar(); this.redraw();
+  }
+
+  // Before drawing on a layer: show it if hidden; refuse if locked.
+  readyLayer(kind) {
+    const name = LAYERS.find(([k]) => k === kind)[1];
+    if (this.locked.has(kind)) { toast(`The ${name} layer is locked`); return false; }
+    if (this.hidden().has(kind)) { this.setHidden(kind, false); toast(`Showing the ${name} layer`); }
+    return true;
+  }
+
+  renderLayers() {
+    const el = $('.layers-panel', this.root);
+    if (!el || el.hidden) return;
+    const h = this.hidden();
+    el.innerHTML = `<header><b>Layers</b><button class="icon-btn" data-close aria-label="Close">${icon('x')}</button></header>
+      ${LAYERS.map(([k, name]) => `<div class="layer-row${h.has(k) ? ' off' : ''}">
+        <span>${name}</span>
+        <button class="icon-btn" data-eye="${k}" title="${h.has(k) ? 'Show' : 'Hide (also in exports)'}" aria-pressed="${!h.has(k)}">${icon(h.has(k) ? 'eye-slash' : 'eye')}</button>
+        <button class="icon-btn${this.locked.has(k) ? ' on' : ''}" data-lock="${k}" title="${this.locked.has(k) ? 'Unlock' : 'Lock: can’t be selected or erased (this device)'}" aria-pressed="${this.locked.has(k)}">${icon('lock-simple')}</button>
+      </div>`).join('')}`;
+    $('[data-close]', el).onclick = () => { el.hidden = true; };
+    el.onclick = (e) => {
+      const b = e.target.closest('button');
+      if (b?.dataset.eye) this.setHidden(b.dataset.eye, !h.has(b.dataset.eye));
+      if (b?.dataset.lock) this.setLocked(b.dataset.lock, !this.locked.has(b.dataset.lock));
+    };
   }
 
   // The art picker: a pack and a category of stamps, as a grid. A tap uses
@@ -531,6 +589,7 @@ class Editor {
       else if (act === 'back') this.editSelected({ z: this.zRange()[0] - 1 });
       else if (act === 'delete') this.deleteSelected();
       else if (act === 'edit-text') this.editLabel(this.selectedObj());
+      else if (act === 'layers') { const p = $('.layers-panel', this.root); p.hidden = !p.hidden; $('.picker', this.root).hidden = true; this.renderLayers(); }
     };
     $('.width', this.root).oninput = (e) => { this.width = +e.target.value; keep('ac.width', this.width); };
     $('.stamp-size', this.root).oninput = (e) => { this.stampSize = sizeFromSlider(+e.target.value); keep('ac.stampSize', this.stampSize); };
@@ -617,6 +676,7 @@ class Editor {
     const pt = this.local(e);
     const [mx, my] = this.toMap(...pt);
     const panning = this.tool === 'pan' || this.spaceDown || e.button === 1 || e.button === 2;
+    if (!panning && TOOL_LAYER[this.tool] && !this.readyLayer(TOOL_LAYER[this.tool])) { this.pointers.delete(e.pointerId); return; }
     if (panning) this.gesture = { kind: 'pan', last: pt };
     else if (this.tool === 'land') {
       // Alt (Option) paints the other way, for quick fixes along a coast.
