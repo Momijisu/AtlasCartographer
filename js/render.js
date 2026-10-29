@@ -307,17 +307,52 @@ function landLayer(project, doc, land, terrain, scale, image, cache) {
   const texIds = [...new Set([style.landTexture, ...terrain.map((t) => t.texture)].filter(Boolean))];
   const pics = new Map(texIds.map((id) => [id, image(id)]));
   if (!cache) return renderLand(project, land, terrain, scale, pics, style.landTexture, st);
-  const sig = [...land, ...terrain].map((o) => o.id + ':' + o.updatedAt).join()
-    + `|${project.width}x${project.height}@${scale}|${style.landTexture || ''}|`
+  // Everything but the strokes themselves: when only strokes changed, just
+  // the area around them is redrawn.
+  const look = `${project.width}x${project.height}@${scale}|${style.landTexture || ''}|`
     + texIds.map((id) => pics.get(id)?.naturalWidth || 0).join() + '|' + JSON.stringify(st);
+  const strokes = new Map([...land, ...terrain].map((o) => [o.id, o]));
   // Thumbnails get their own slot, so the home page doesn't evict the editor's layer.
   const key = scale < 0.2 ? `${project.id}:thumb` : project.id;
   const hit = layers.get(key);
-  if (hit && hit.sig === sig) return hit.canvas;
+  // Partial redraws can differ from a full one by a shade on a few edge
+  // pixels; a full redraw every so often keeps that from building up.
+  if (hit && hit.look === look && hit.partials < 25) {
+    const changed = [];
+    for (const [id, o] of strokes) { const was = hit.strokes.get(id); if (!was || was.updatedAt !== o.updatedAt) changed.push(o, ...(was ? [was] : [])); }
+    for (const [id, was] of hit.strokes) if (!strokes.has(id)) changed.push(was);
+    if (!changed.length) return hit.canvas;
+    // Room around the change for the coastline, shading and ripples it moves.
+    const pad = Math.max(...STYLE.ripples) + st.coastWidth + 8;
+    const box = changed.map((o) => grow(strokeBox(o), pad)).reduce(union);
+    if ((box[2] - box[0]) * (box[3] - box[1]) < project.width * project.height * 0.5) {
+      renderLand(project, land, terrain, scale, pics, style.landTexture, st, { canvas: hit.canvas, box });
+      hit.strokes = strokes;
+      hit.partials++;
+      return hit.canvas;
+    }
+  }
   const canvas = renderLand(project, land, terrain, scale, pics, style.landTexture, st);
-  layers.set(key, { sig, canvas });
+  layers.set(key, { look, strokes, canvas, partials: 0 });
   return canvas;
 }
+
+// A stroke's bounding box in map pixels, [x0, y0, x1, y1], including its
+// width and any feathering.
+const boxes = new WeakMap();
+function strokeBox(o) {
+  if (boxes.has(o)) return boxes.get(o);
+  const p = o.points;
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (let i = 0; i < p.length; i += 2) { x0 = Math.min(x0, p[i]); x1 = Math.max(x1, p[i]); y0 = Math.min(y0, p[i + 1]); y1 = Math.max(y1, p[i + 1]); }
+  const r = o.width / 2 + (o.soft || 0) * o.width * 0.5;
+  const b = [x0 - r, y0 - r, x1 + r, y1 + r];
+  boxes.set(o, b);
+  return b;
+}
+const grow = (b, d) => [b[0] - d, b[1] - d, b[2] + d, b[3] + d];
+const union = (a, b) => [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[2], b[2]), Math.max(a[3], b[3])];
+const meets = (a, b) => a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3];
 
 // A repeating fill of a library texture, textureSize map pixels a tile.
 export function texturePattern(ctx, img, st) {
@@ -327,8 +362,30 @@ export function texturePattern(ctx, img, st) {
   return pat;
 }
 
-function renderLand(project, land, terrain, scale, pics, landTexture, st) {
-  const w = Math.max(1, Math.round(project.width * scale)), h = Math.max(1, Math.round(project.height * scale));
+// into: { canvas, box } redraws just that box (map pixels) of an existing
+// layer: the box is drawn on its own canvas, offset by whole pixels so every
+// shape falls on the same pixel grid as in a full render, then copied in.
+// Strokes that can't reach the box are skipped.
+function renderLand(project, land, terrain, scale, pics, landTexture, st, into = null) {
+  const W = Math.max(1, Math.round(project.width * scale)), H = Math.max(1, Math.round(project.height * scale));
+  let ox = 0, oy = 0, w = W, h = H, near = () => true;
+  // The region's own canvas reaches MARGIN pixels past it on each side: shapes
+  // are trimmed at a canvas's edge before drawing, which shifts their
+  // anti-aliasing slightly there, so only the middle is copied back.
+  const MARGIN = 48;
+  let copy = null;
+  if (into) {
+    const b = into.box;
+    const x0 = Math.max(0, Math.floor(b[0] * scale)), y0 = Math.max(0, Math.floor(b[1] * scale));
+    const x1 = Math.min(W, Math.ceil(b[2] * scale) + 1), y1 = Math.min(H, Math.ceil(b[3] * scale) + 1);
+    if (x1 <= x0 || y1 <= y0) return into.canvas;
+    copy = [x0, y0, x1 - x0, y1 - y0];
+    ox = x0 - MARGIN; oy = y0 - MARGIN; w = x1 - x0 + 2 * MARGIN; h = y1 - y0 + 2 * MARGIN;
+    // A stroke grown by d reaches the box only if its own box, grown by d,
+    // does (with a little extra for anti-aliased edges).
+    const reach = [ox / scale - 4 / scale, oy / scale - 4 / scale, (ox + w) / scale + 4 / scale, (oy + h) / scale + 4 / scale];
+    near = (s, d = 0) => meets(grow(strokeBox(s), Math.max(0, d)), reach);
+  }
   const out = makeCanvas(w, h);
   const mask = makeCanvas(w, h);
   const o = out.getContext('2d'), m = mask.getContext('2d');
@@ -336,13 +393,14 @@ function renderLand(project, land, terrain, scale, pics, landTexture, st) {
     m.globalCompositeOperation = 'source-over';
     m.setTransform(1, 0, 0, 1, 0, 0);
     m.clearRect(0, 0, w, h);
-    m.setTransform(scale, 0, 0, scale, 0, 0);
+    m.setTransform(scale, 0, 0, scale, -ox, -oy);
     m.fillStyle = m.strokeStyle = '#000';
   };
   // The land grown by d, as a black mask.
   const landMask = (d) => {
     reset();
     for (const s of land) {
+      if (!near(s, d)) continue;
       m.globalCompositeOperation = s.mode === 'erase' ? 'destination-out' : 'source-over';
       strokePath(m, s.points, s.mode === 'erase' ? s.width - 2 * d : s.width + 2 * d);
     }
@@ -351,7 +409,8 @@ function renderLand(project, land, terrain, scale, pics, landTexture, st) {
   const paint = (fill, target = o) => {
     m.globalCompositeOperation = 'source-in';
     m.fillStyle = fill;
-    m.fillRect(0, 0, project.width, project.height);
+    m.setTransform(scale, 0, 0, scale, -ox, -oy); // patterns line up with the whole map
+    m.fillRect(ox / scale, oy / scale, w / scale, h / scale);
     target.drawImage(mask, 0, 0);
   };
   const base = landTexture && pics.get(landTexture) ? texturePattern(m, pics.get(landTexture), st) : st.land;
@@ -384,14 +443,21 @@ function renderLand(project, land, terrain, scale, pics, landTexture, st) {
       i = j;
       const fill = tex ? (pics.get(tex) ? texturePattern(m, pics.get(tex), st) : null) : base;
       if (!fill) continue; // its picture hasn't loaded yet
+      const reach = run.filter((s) => near(s));
+      if (!reach.length) continue;
       reset();
-      for (const s of run) softStroke(m, s, scale);
+      for (const s of reach) softStroke(m, s, scale);
       paint(fill, tc);
     }
     if (land.length) { landMask(0); tc.globalCompositeOperation = 'destination-in'; tc.drawImage(mask, 0, 0); }
     o.drawImage(t, 0, 0);
   }
-  return out;
+  if (!into) return out;
+  const c = into.canvas.getContext('2d');
+  const [cx, cy, cw, ch] = copy;
+  c.clearRect(cx, cy, cw, ch);
+  c.drawImage(out, MARGIN, MARGIN, cw, ch, cx, cy, cw, ch);
+  return into.canvas;
 }
 
 // Diagonal hatching in the coast's colour, a line every 7 map pixels.

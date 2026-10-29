@@ -25,7 +25,7 @@ Early. What works today:
 
 Planned:
 
-- Faster land redraws on very detailed maps
+- City and battlemap modes (walls, floors, grid snapping)
 
 ## Editor shortcuts
 
