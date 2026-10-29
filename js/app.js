@@ -62,7 +62,9 @@ async function boot() {
 // Keep the install event so we can offer our own Install button, but don't
 // preventDefault(): that would hide the browser's own install prompt/menu entry.
 addEventListener('beforeinstallprompt', (e) => { state.installPrompt = e; showInstallButton(); });
-addEventListener('appinstalled', () => { state.installPrompt = null; showInstallButton(); });
+// An offer made before this module ran was kept by the first script in index.html.
+if (window.acInstallPrompt) state.installPrompt = window.acInstallPrompt;
+addEventListener('appinstalled', () => { state.installPrompt = null; window.acInstallPrompt = null; showInstallButton(); });
 
 function showInstallButton() {
   const btn = document.getElementById('installTop');
@@ -74,6 +76,7 @@ async function promptInstall() {
   state.installPrompt.prompt();
   await state.installPrompt.userChoice;
   state.installPrompt = null;
+  window.acInstallPrompt = null;
   showInstallButton();
 }
 

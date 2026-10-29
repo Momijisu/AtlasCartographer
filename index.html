@@ -9,6 +9,9 @@
       parent.postMessage({ acAuth: location.search }, location.origin);
       window.stop();
     }
+    // Chrome can say the app is installable before the app's own code has
+    // loaded; keep that offer for js/app.js to pick up.
+    addEventListener('beforeinstallprompt', (e) => { window.acInstallPrompt = e; });
   </script>
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>AtlasCartographer</title>

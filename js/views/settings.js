@@ -16,7 +16,10 @@ export function applyTheme() {
 export function viewSettings(view) {
   setTitle('Settings');
   const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone;
-  const ios = /iphone|ipad|ipod/i.test(navigator.userAgent) || (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
+  const ua = navigator.userAgent;
+  const ios = /iphone|ipad|ipod/i.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+  const edge = /Edg/i.test(ua);
+  const android = /android/i.test(ua);
   view.innerHTML = `<div class="settings">
     <div class="page-head"><div><h1>Settings</h1></div></div>
     <div class="panel" id="oneDriveCard"></div>
@@ -24,7 +27,13 @@ export function viewSettings(view) {
       <h2>Install the app</h2>
       ${standalone ? `<p>${icon('check')} You’re using the installed app.</p>` : `
         ${state.installPrompt ? `<p><button class="btn primary" id="installBtn">${icon('download-simple')} Install AtlasCartographer</button></p>` : ''}
-        <p class="muted">${ios ? 'Tap <b>Share</b> → <b>Add to Home Screen</b>.' : 'Use the install icon in the address bar, or the browser menu → <b>Install app</b>.'}</p>`}
+        <p class="muted">${ios
+          ? `Tap <b>Share</b>${edge ? ' (in Edge, menu ⋯ → Share)' : ''} → <b>Add to Home Screen</b>. Before iOS 16.4, use Safari.`
+          : android && edge
+            ? 'Menu <b>⋯</b> → <b>Add to phone</b> (or <b>Install app</b>). If it’s missing, reload and try again.'
+            : android
+              ? 'Menu ⋮ → <b>Install app</b>.'
+              : 'Use the install icon in the address bar, or menu → <b>Apps</b> → <b>Install AtlasCartographer</b>.'}</p>`}
       <p class="muted small">Works offline. Changes sync to OneDrive when you’re online.</p>
     </div>
     <div class="panel">
