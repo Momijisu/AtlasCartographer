@@ -1,62 +1,30 @@
 # AtlasCartographer
 
-A fantasy map maker for phone and PC, and a companion to [WorldAtlas](https://github.com/Momijisu/WorldAtlas). It works offline, installs as its own app, and syncs through your own OneDrive.
+A fantasy map maker for phone and PC, and a companion to [WorldAtlas](https://github.com/Momijisu/WorldAtlas). It works offline and syncs through your own OneDrive.
+
+**Live app:** https://momijisu.github.io/AtlasCartographer/
+
+## Features
+
+- World, region, city and battlemap maps in one editor: world and region maps start as sea, cities and battlemaps as land, and battlemaps are sized in squares with a matching grid
+- Land and water brushes that draw the coastline, its outline and ripples in the sea for you, with coasts from smooth to rugged
+- Terrain painting: any texture from your art library brushed onto the land with soft edges and adjustable strength, stopping at the coast
+- Stamps from your art library, placed one at a time or painted with a scatter brush (spacing, spread, size variation, random rotation and mirroring); Ctrl-click to place a random mix
+- Move, scale, rotate, flip, layer, tint, brighten and fade stamps; select several to move, duplicate, copy and paste, also between maps
+- Paths: roads, trails, borders, and rivers that widen towards the mouth, with points you can drag, add and remove afterwards
+- Labels: straight, curved, or along a line you draw, in six fonts, with letter spacing, capitals and a soft outline
+- A pen and colour brush from fine lines to broad washes, with opacity and soft edges
+- Layers you can add, rename, reorder, hide and lock
+- Map style: sea, land and coast colours, coast width, rippled, hatched or plain shores, stamp shadows, a paper texture, square or hex grids, darker edges, a frame and a scale bar
+- An art library: import a folder or zip of images, whose folders become packs and categories; tag packs by map type, browse them with previews, search everything, and see what you've used recently
+- Export to PNG, WebP or JPEG at full size or smaller, ready to upload to WorldAtlas Maps
+- Duplicate a map, or change its size by scaling everything or changing the canvas
+- Keyboard shortcuts for every tool; press **?** in the editor for the list
+- Dark and light themes
 
 Plain HTML, CSS and JavaScript. No server, no build step.
 
-## Status
-
-Early. What works today:
-
-- Projects: create, rename, duplicate, resize (scale everything, or change the canvas around the content) and delete maps. Every map uses the same editor; its type sets the start: World and Region maps begin as sea, City maps and Battlemaps as land (the water brush carves rivers and lakes), and Battlemaps are sized in squares with a matching grid. Art packs can be tagged with the kind of map they're for, and the picker shows that art first
-- Editor: pan and zoom (mouse, wheel, touch, pinch), a pen and colour brush (any colour, 2 to 800 pixels, opacity, soft edges, for lines or painted regions), an eraser, undo and redo
-- Land and water: paint land, carve water (or hold Alt to switch), and the coastline, its outline and ripple rings in the sea draw themselves. Coasts are irregular like real shorelines (bays, headlands, a ragged edge), from smooth to rugged in Map style; each stroke's shape is fixed by its id, so it's the same on every device. Fill the land with any texture from the library. On PC the land is drawn at the map's full resolution; phones and tablets use a lighter version (Settings → Land detail)
-- Terrain: paint any library texture onto the land (grass, forest floor, sand…) with soft edges and adjustable strength; it stops at the coast. Paint "Base land" to take it back off
-- Paths: roads (dashed), trails (dotted), borders (dash-dot), and rivers that widen towards the mouth. Select one to reshape it: drag its points, drag a + to add a point, Alt-click or double-click to remove one; change its style or width in Adjust
-- Map style: sea, land and coastline colours, coastline width, the shore (ripples, engraved hatching or plain), shadows under stamps; and finishing touches: a paper texture over the whole map, square or hex grids, darker edges, a line or double frame, a scale bar
-- Stamps from the art library: place one, or paint many with the scatter brush (randomly chosen from the pictures you pick, overlapping front to back; set its spacing, spread, size variation, random rotation and mirroring). The picker searches all your art by name, category or pack, and lists what you've used recently. Select a stamp to move, scale (corners), rotate (top handle; Shift snaps to 15°), flip, bring forward, send back or delete. Adjust opacity, tint and brightness. Drag a box (or Shift-click) to select several; duplicate, copy and paste, also between maps
-- Labels: straight, curved, or along a line you draw (drag with the text tool; its points edit like a path's), in six fonts, with colour, letter spacing, capitals and a soft outline. Move, rotate and resize them like stamps; Enter or a double-click edits
-- Layers: start with Labels, Stamps, and Ink and paths over Land and sea; add your own, rename and reorder them, choose which one you draw on (or Automatic: each kind on its own), and move selected things between them. Hide a layer (saved with the map, and left out of exports) or lock it on this device so it can't be selected or erased. Deleting a layer keeps what's on it. Labels stay above the paper, grid and shading
-- Export as PNG, WebP or JPEG, at full size or smaller, with every stamp's full-size art (ready to upload to WorldAtlas Maps)
-- OneDrive sync of every project, merged stroke by stroke, so edits from two devices both survive
-- Art library: import a folder or zip of images (PNG, WebP, JPEG, GIF, SVG, AVIF). The top folder is the pack; folders inside it are categories, each marked as stamps or textures. Duplicates are skipped.
-- Art syncs through OneDrive: the device that imported a pack uploads it in the background; other devices get thumbnails straight away and full-size art when it's used, or the whole pack with **Keep offline**
-- Installable and offline, with dark and light themes
-
-Planned:
-
-- Grid snapping, a wall-and-door tool, exports sized for virtual tabletops
-
-## Editor shortcuts
-
-Press **?** in the editor for this list.
-
-| Key | |
-|---|---|
-| H, or hold Space | move the view |
-| V / L / G / P / T | select / land and water / terrain / paths / text |
-| B / E / S / R | pen and colour brush / eraser / stamp / scatter |
-| [ ] | smaller / larger brush or stamp (with a selection: send back / bring forward) |
-| Alt (while painting land) | land ↔ water |
-| Shift (while rotating) | turn in 15° steps |
-| Ctrl / Cmd click a picture | pick several stamps to place at random |
-| Drag on empty map, Shift-click | select several |
-| Arrows (Shift: ×10) | nudge the selection |
-| F | flip |
-| Enter, or double-click | edit a label |
-| Alt-click, or double-click a point | remove a path point |
-| Del | delete |
-| Esc | cancel what's half done, then clear the selection |
-| Ctrl Z / Ctrl Shift Z (or Y) | undo / redo |
-| Ctrl C / X / V | copy, cut, paste (also between maps) |
-| Ctrl D / Ctrl A | duplicate / select all |
-| 0, + − or the wheel | fit the map, zoom |
-
-## Art assets
-
-No art is bundled. Asset packs are imported on a device and synced through your OneDrive; they are never committed to this repository (`.gitignore` guards the usual places).
-
-Each image is named by a hash of its contents, so the same file imported twice is stored once, and an uploaded file never changes. Zips can use the usual compression (stored or deflate) but not ZIP64: split archives over 4 GB, or import the unzipped folder. Importing a whole folder needs a desktop browser; on phones, import zips or pick images.
+Planned: grid snapping, a wall-and-door tool, and exports sized for virtual tabletops.
 
 ## 1. Hosting
 
@@ -66,52 +34,66 @@ The app must be served over HTTPS to install on a phone. GitHub Pages works:
 2. In the repo's **Settings → Pages**, set **Source** to **GitHub Actions**.
 3. `.github/workflows/pages.yml` deploys every push to `main`, to `https://<user>.github.io/<repo>/`.
 
+Pages on a private repo needs a paid GitHub plan. Maps and art aren't stored in the repo, so a public repo is fine. Netlify or Cloudflare Pages also work.
+
 ## 2. OneDrive sync
 
-AtlasCartographer has its own Azure app registration (its client ID is in `js/config.js`). To set one up for another copy:
+One-time setup with Microsoft:
 
-1. Sign in at https://entra.microsoft.com → **App registrations → New registration**:
+1. Sign in at https://entra.microsoft.com with the account whose OneDrive you'll use. If personal accounts are refused, create a free Azure account first (card verification, no charge).
+2. **App registrations → New registration**:
    - Supported account types: *any organizational directory and personal Microsoft accounts*
-   - Redirect URI: platform **Single-page application**, URL = the app's address with the trailing `/` (e.g. `https://momijisu.github.io/AtlasCartographer/`; Settings shows it with a Copy button)
-2. Copy the **Application (client) ID** into `js/config.js` and push. (With no ID there, Settings asks each device for one.)
-3. In the app, **Settings → Connect OneDrive**.
+   - Redirect URI: platform **Single-page application**, URL = the app's address with the trailing `/` (Settings shows it with a Copy button)
+3. Copy the **Application (client) ID** into `js/config.js` and push. (With no ID there, Settings asks each device for one.)
+4. In the app, **Settings → Connect OneDrive**.
 
-The app asks for `Files.ReadWrite.AppFolder`, which only reaches its own folder, `OneDrive/Apps/<registration name>`, and `User.Read` for your name. WorldAtlas and this app live on the same site (`<user>.github.io`), so their sign-ins and local data are kept under separate names.
+The app asks for `Files.ReadWrite.AppFolder`, which only reaches `OneDrive/Apps/<registration name>`, and `User.Read` for your name. No other permissions are needed. Give it its own registration rather than WorldAtlas's, so each app keeps to its own folder.
 
 For local testing, add `http://localhost:8000/` as a redirect URI and run `python3 -m http.server 8000`.
 
+## 3. Installing
+
+- **Android:** Chrome menu → *Install app*. In Edge: menu → *Add to phone*.
+- **iPhone/iPad:** Share → *Add to Home Screen*. Connect OneDrive from inside the installed app; iOS keeps its storage separate from the browser's.
+- **PC:** the install icon in the address bar, in Edge or Chrome.
+
+It installs as its own app next to WorldAtlas: its manifest has its own `id`, since both live on the same site.
+
 ## Syncing
 
-Each device keeps a full copy in IndexedDB. OneDrive holds:
+Each device keeps a full copy in IndexedDB. OneDrive holds `projects.json` (every map's name, size and type), `projects/` (each map's drawing), `assets.json` (the art catalogue), `assets/` (full-size art) and `thumbs/` (previews).
 
-```
-Apps/<registration name>/
-  projects.json          every map's name and size (and deletions)
-  projects/<id>.json     each map's drawing
-  assets.json            the art catalogue: pack, category, size, stamp or texture
-  assets/<hash>.<ext>    full-size art
-  thumbs/<hash>          small previews
-```
+Sync runs shortly after each edit, when the app is reopened or comes back online, and every two minutes. Only maps that changed are transferred, and they merge object by object, so edits made on two devices both survive. If OneDrive asks the app to slow down, it waits and carries on.
 
-Sync runs shortly after each edit, when the app is reopened or comes back online, and every two minutes. Only maps that changed are transferred. Art moves in the background afterwards, several files at a time, waiting whenever OneDrive asks to slow down; an interrupted upload picks up where it left off. Uploads are guarded by the file's eTag, so if another device wrote first the app downloads, merges and tries again instead of overwriting.
+Art is never part of the app or this repo. The device that imports a pack uploads it in the background, a few files at a time, and picks up where it left off if interrupted; other devices get the previews straight away and full-size art when it's used, or a whole pack with **Keep offline**. Each image is named by a hash of its contents, so the same file imported twice is stored once. Zips can't be over 4 GB (ZIP64); import the unzipped folder instead, from a desktop browser.
+
+Microsoft limits browser sign-ins to 24 hours. The app renews in the background before then, in a hidden frame, so nothing interrupts you. Browsers that block third-party sign-in cookies (such as Safari) can't renew this way; there the sync badge shows **Reconnect**, and one tap signs you straight back in.
 
 ## Project layout
 
 ```
 index.html            app shell
-css/app.css           design system and both themes (shared look with WorldAtlas)
+css/app.css           design system and both themes (shared with WorldAtlas)
 css/editor.css        the editor
 js/app.js             boot, routing, top bar
-js/views/*.js         one module per screen
-js/render.js          draws a map document (editor and thumbnails)
+js/views/*.js         one module per screen: maps, editor, art library, settings
+js/render.js          draws a map: land and coasts, terrain, stamps, paths, labels, finishing
 js/images.js          decoded art for drawing, loading full size on demand
-js/export.js          full-size picture export
-js/store.js           projects and drawings, merge rules
-js/assets.js          art catalogue, importing, pictures on this device
-js/assetsync.js       moving art to and from OneDrive
-js/zip.js             zip reader (no dependencies)
+js/export.js          picture export
+js/store.js           maps and their drawings, merging
 js/sync.js            OneDrive sync
-js/auth.js            Microsoft sign-in (PKCE), background renewal
+js/assets.js          art catalogue and importing
+js/assetsync.js       moving art to and from OneDrive
+js/zip.js             zip reader
+js/auth.js            Microsoft sign-in (auth code + PKCE)
 js/db.js              IndexedDB
-sw.js                 offline cache; bump js/version.js on every release
+js/icons.js           Phosphor icons (MIT)
+js/config.js          Microsoft client ID
+js/version.js         app version
+sw.js                 service worker
+fonts/                Cormorant Garamond, Alegreya Sans, Cedarville Cursive, Kalam (OFL)
 ```
+
+## Releasing
+
+Bump `AC_VERSION` and `AC_BUILD` in `js/version.js`. Installed apps pick up the new version and replace their offline cache. Settings → About shows the running and latest versions. When adding or removing files, update `SHELL` in `sw.js`.
