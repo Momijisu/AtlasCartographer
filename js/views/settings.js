@@ -5,7 +5,6 @@ import * as sync from '../sync.js';
 import { $, esc, toast, timeAgo, confirmDialog } from '../util.js';
 import { icon } from '../icons.js';
 import { setTitle, state } from '../ui.js';
-import { REMOTE_DIR } from '../config.js';
 
 export function applyTheme() {
   document.documentElement.dataset.theme = localStorage.getItem('ac.theme') || 'dark';
@@ -56,12 +55,12 @@ export function renderOneDriveCard() {
   const st = sync.getStatus();
   const acct = auth.account();
   const cid = auth.clientId();
-  const folder = `<code>OneDrive/Apps/WorldAtlas/${esc(REMOTE_DIR)}</code>`;
+  const folder = 'a private folder in your OneDrive, under <b>Apps</b>';
   let main;
   if (!cid) {
-    main = `<p>Syncing uses a private folder in your OneDrive (${folder}). It needs a Microsoft app registration (see the README). Paste its Application (client) ID below.</p>`;
+    main = `<p>Syncing uses ${folder}. It needs a Microsoft app registration (see the README). Paste its Application (client) ID below.</p>`;
   } else if (st.state === 'off') {
-    main = `<p>Sign in with Microsoft to sync your maps through ${folder}, next to WorldAtlas’s files.</p>
+    main = `<p>Sign in with Microsoft to sync your maps through ${folder}.</p>
       <p><button class="btn primary" id="connectBtn">${icon('cloud-check')} Connect OneDrive</button></p>`;
   } else if (st.state === 'reauth') {
     main = `<p class="warn">${esc(st.message || 'Your OneDrive session expired.')}</p>
@@ -77,7 +76,7 @@ export function renderOneDriveCard() {
     <details ${cid ? '' : 'open'}><summary>Microsoft app registration</summary>
       ${auth.builtInClientId ? '' : `<label>Application (client) ID<input id="cidInput" value="${esc(cid)}" placeholder="00000000-0000-0000-0000-000000000000"></label>
       <button class="btn small" id="saveCid">Save client ID</button>`}
-      <p class="small">This app shares WorldAtlas’s registration. Add this address to it as a redirect URI (platform: <b>Single-page application</b>):<br><code class="copy">${esc(auth.redirectUri())}</code> <button class="btn small quiet" id="copyRuri">Copy</button></p>
+      <p class="small">The registration needs this address as a redirect URI (platform: <b>Single-page application</b>):<br><code class="copy">${esc(auth.redirectUri())}</code> <button class="btn small quiet" id="copyRuri">Copy</button></p>
     </details>`;
   $('#connectBtn')?.addEventListener('click', () => auth.signIn().catch((e) => toast(e.message)));
   $('#syncNowBtn')?.addEventListener('click', () => sync.sync());

@@ -1,4 +1,4 @@
-// Two-way sync between IndexedDB and OneDrive (Apps/WorldAtlas/Cartographer/).
+// Two-way sync between IndexedDB and the app's own folder in OneDrive → Apps.
 //
 // projects.json holds every project's index record (including deletion
 // tombstones); projects/<id>.json holds each project's drawing. Both merge
@@ -9,10 +9,9 @@
 // only transfers the maps that need it.
 import * as auth from './auth.js';
 import * as store from './store.js';
-import { REMOTE_DIR } from './config.js';
 
 const APPROOT = '/me/drive/special/approot';
-const ROOT = `${APPROOT}:/${REMOTE_DIR}`;
+const ROOT = `${APPROOT}:`; // + '/path/in/the/app/folder'
 const INDEX = 'projects.json';
 const docPath = (id) => `projects/${id}.json`;
 
@@ -90,18 +89,16 @@ async function check(res, what) {
   throw err;
 }
 
-// Create Cartographer/ and Cartographer/projects/ once per device. 409 means
-// they already exist, which is fine; nothing here ever replaces a folder.
+// Create projects/ once per device. 409 means it already exists, which is
+// fine; nothing here ever replaces a folder.
 async function ensureFolders() {
   if (store.meta.folders) return;
-  for (const [parent, name] of [[`${APPROOT}/children`, REMOTE_DIR], [`${ROOT}:/children`, 'projects']]) {
-    const res = await auth.graph(parent, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, folder: {}, '@microsoft.graph.conflictBehavior': 'fail' }),
-    });
-    if (res.status !== 409) await check(res, 'Creating the OneDrive folder');
-  }
+  const res = await auth.graph(`${APPROOT}/children`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'projects', folder: {}, '@microsoft.graph.conflictBehavior': 'fail' }),
+  });
+  if (res.status !== 409) await check(res, 'Creating the OneDrive folder');
   await store.saveMeta({ folders: true });
 }
 

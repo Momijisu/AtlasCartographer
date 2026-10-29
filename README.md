@@ -34,13 +34,15 @@ The app must be served over HTTPS to install on a phone. GitHub Pages works:
 
 ## 2. OneDrive sync
 
-AtlasCartographer uses the same Azure app registration as WorldAtlas (its client ID is already in `js/config.js`):
+AtlasCartographer has its own Azure app registration (its client ID is in `js/config.js`). To set one up for another copy:
 
-1. Sign in at https://entra.microsoft.com → **App registrations** → the WorldAtlas registration → **Authentication**.
-2. Under **Single-page application**, add this app's address as another redirect URI, with the trailing `/`. **Settings → OneDrive sync → Microsoft app registration** in the app shows the exact address with a Copy button.
+1. Sign in at https://entra.microsoft.com → **App registrations → New registration**:
+   - Supported account types: *any organizational directory and personal Microsoft accounts*
+   - Redirect URI: platform **Single-page application**, URL = the app's address with the trailing `/` (e.g. `https://momijisu.github.io/AtlasCartographer/`; Settings shows it with a Copy button)
+2. Copy the **Application (client) ID** into `js/config.js` and push. (With no ID there, Settings asks each device for one.)
 3. In the app, **Settings → Connect OneDrive**.
 
-The registration's app folder is `OneDrive/Apps/WorldAtlas`. This app keeps everything in its own subfolder, `Apps/WorldAtlas/Cartographer`, and never touches WorldAtlas's files. Both apps live on the same site (`<user>.github.io`), so their sign-ins and local data are kept under separate names.
+The app asks for `Files.ReadWrite.AppFolder`, which only reaches its own folder, `OneDrive/Apps/<registration name>`, and `User.Read` for your name. WorldAtlas and this app live on the same site (`<user>.github.io`), so their sign-ins and local data are kept under separate names.
 
 For local testing, add `http://localhost:8000/` as a redirect URI and run `python3 -m http.server 8000`.
 
@@ -49,7 +51,7 @@ For local testing, add `http://localhost:8000/` as a redirect URI and run `pytho
 Each device keeps a full copy in IndexedDB. OneDrive holds:
 
 ```
-Apps/WorldAtlas/Cartographer/
+Apps/<registration name>/
   projects.json          every map's name and size (and deletions)
   projects/<id>.json     each map's drawing
 ```
