@@ -3,8 +3,11 @@
 //
 // projects: one small record per map (name, size), listed on the home page.
 // docs:     the drawing itself for each project, keyed by project id.
+// assets:   the art catalogue (synced): one record per file, keyed by its hash.
+// blobs:    full-size art on this device; thumbs: small previews of it.
+// assetState: what this device has uploaded or cleaned up (never synced).
 const DB_NAME = 'atlascartographer';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 let dbp;
 function open() {
@@ -16,6 +19,9 @@ function open() {
         d.createObjectStore('projects', { keyPath: 'id' });
         d.createObjectStore('docs', { keyPath: 'id' });
         d.createObjectStore('meta', { keyPath: 'key' });
+      }
+      if (e.oldVersion < 2) {
+        for (const n of ['assets', 'blobs', 'thumbs', 'assetState']) d.createObjectStore(n, { keyPath: 'id' });
       }
     };
     r.onsuccess = () => resolve(r.result);
@@ -47,6 +53,10 @@ export async function putMany(store, values) {
   const os = t.objectStore(store);
   for (const v of values) os.put(v);
   return done(t);
+}
+
+export async function getAllKeys(store) {
+  return req((await open()).transaction(store).objectStore(store).getAllKeys());
 }
 
 export async function del(store, keys) {

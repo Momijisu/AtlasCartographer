@@ -240,3 +240,37 @@ code.copy { user-select: all; word-break: break-all; }
 .settings code { overflow-wrap: anywhere; }
 .status-synced { color: var(--ok); }
 .status-error { color: var(--warn); }
+
+/* ---------- art library ---------- */
+.pack-list { display: grid; gap: .6rem; }
+.pack-row { display: flex; align-items: center; gap: 1rem; padding: .7rem .9rem; background: var(--ink-2); border: 1px solid var(--rule); border-radius: var(--r); }
+.pack-row:hover { border-color: var(--rule-strong); }
+.pack-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: .8rem; color: var(--text); }
+.pack-main:hover { text-decoration: none; }
+.pack-main b { font: 600 1.3rem/1.1 var(--display); }
+.pack-main .sub { display: block; font-size: .85rem; color: var(--muted); }
+.pack-icon { display: grid; place-items: center; width: 44px; height: 44px; flex-shrink: 0; border-radius: var(--r); background: var(--ink-3); color: var(--brass); font-size: 1.4rem; }
+.pack-row label.check, .page-head label.check { margin: 0; white-space: nowrap; }
+.progress-panel progress { width: 100%; height: 8px; margin: .6rem 0 .2rem; accent-color: var(--rubric); }
+.progress-panel p { margin: .3rem 0 0; }
+
+details.cat { border-top: 1px solid var(--rule); }
+details.cat > summary { list-style: none; display: flex; align-items: center; gap: .6rem; padding: .7rem 0; cursor: pointer; }
+details.cat > summary::-webkit-details-marker { display: none; }
+.cat-name { font: 600 1.25rem/1.1 var(--display); display: inline-flex; align-items: center; gap: .35rem; }
+.cat-name .caret { transition: transform .15s; font-size: .9rem; color: var(--muted); }
+details.cat[open] .cat-name .caret { transform: rotate(90deg); }
+.kind-seg { margin-left: auto; }
+.seg.small button { font-size: .8rem; padding: .3em .7em; }
+.asset-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: .4rem; padding-bottom: 1rem; }
+.tile {
+  aspect-ratio: 1; display: grid; place-items: center; overflow: hidden;
+  border: 1px solid var(--rule); border-radius: var(--r); color: var(--muted); font-size: 1.4rem;
+  background: repeating-conic-gradient(var(--ink-3) 0 25%, var(--ink-2) 0 50%) 0 0 / 16px 16px;
+}
+.tile img { width: 100%; height: 100%; object-fit: contain; padding: 4px; }
+.tile.missing { opacity: .5; }
+@media (max-width: 600px) {
+  .pack-row { flex-wrap: wrap; }
+  .asset-grid { grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)); }
+}

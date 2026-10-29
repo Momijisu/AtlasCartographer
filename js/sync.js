@@ -7,12 +7,19 @@
 // another device makes us re-download and merge instead of overwriting. One
 // listing of projects/ tells us which drawings changed elsewhere, so a sync
 // only transfers the maps that need it.
+//
+// assets.json is the art catalogue, merged the same way; the art itself moves
+// in the background afterwards (assetsync.js).
 import * as auth from './auth.js';
 import * as store from './store.js';
+import * as assets from './assets.js';
+import * as assetsync from './assetsync.js';
 
 const APPROOT = '/me/drive/special/approot';
 const ROOT = `${APPROOT}:`; // + '/path/in/the/app/folder'
 const INDEX = 'projects.json';
+const CATALOGUE = 'assets.json';
+const FOLDERS = ['projects', 'assets', 'thumbs'];
 const docPath = (id) => `projects/${id}.json`;
 
 let status = { state: 'off', message: '' };
@@ -51,6 +58,7 @@ async function run() {
   try {
     await ensureFolders();
     await retry(INDEX, syncIndex);
+    await retry(CATALOGUE, syncCatalogue);
     const remote = await listDocs();
     for (const p of [...store.projects.values()]) {
       if (p.deleted) await removeRemoteDoc(p.id, remote);
@@ -63,6 +71,7 @@ async function run() {
     }
     await store.saveMeta({ lastSync: Date.now() });
     setStatus(store.isDirty() ? 'pending' : 'synced');
+    assetsync.kick();
   } catch (e) {
     console.error('Sync failed', e);
     // A lapsed session: try renewing in the background before asking.
@@ -89,17 +98,20 @@ async function check(res, what) {
   throw err;
 }
 
-// Create projects/ once per device. 409 means it already exists, which is
-// fine; nothing here ever replaces a folder.
+// Create the app's folders once per device (again when a version adds one).
+// 409 means a folder already exists, which is fine; nothing here ever
+// replaces a folder.
 async function ensureFolders() {
-  if (store.meta.folders) return;
-  const res = await auth.graph(`${APPROOT}/children`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name: 'projects', folder: {}, '@microsoft.graph.conflictBehavior': 'fail' }),
-  });
-  if (res.status !== 409) await check(res, 'Creating the OneDrive folder');
-  await store.saveMeta({ folders: true });
+  if (store.meta.folders === FOLDERS.length) return;
+  for (const name of FOLDERS) {
+    const res = await auth.graph(`${APPROOT}/children`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, folder: {}, '@microsoft.graph.conflictBehavior': 'fail' }),
+    });
+    if (res.status !== 409) await check(res, 'Creating the OneDrive folder');
+  }
+  await store.saveMeta({ folders: FOLDERS.length });
 }
 
 // Download, merge and (if this device is ahead) upload one JSON file.
@@ -146,6 +158,16 @@ function syncIndex() {
     dirty: store.meta.localRev > store.meta.syncedRev,
     hasLocal: store.projects.size > 0,
     agreed: (snap) => store.saveMeta({ syncedRev: snap.rev }),
+  });
+}
+
+function syncCatalogue() {
+  return syncFile(CATALOGUE, {
+    merge: (json) => assets.mergeAssets(json.assets || []),
+    collect: () => ({ rev: store.meta.assetRev, body: { assets: [...assets.assets.values()] } }),
+    dirty: store.meta.assetRev > store.meta.assetSynced,
+    hasLocal: assets.assets.size > 0,
+    agreed: (snap) => store.saveMeta({ assetSynced: snap.rev }),
   });
 }
 

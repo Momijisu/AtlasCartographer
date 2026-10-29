@@ -11,18 +11,21 @@ Early. What works today:
 - Projects: create, rename and delete maps at a few preset sizes
 - Editor: pan and zoom (mouse, wheel, touch, pinch), an ink pen in five colours, an eraser, undo and redo
 - OneDrive sync of every project, merged stroke by stroke, so edits from two devices both survive
+- Art library: import a folder or zip of images (PNG, WebP, JPEG, GIF, SVG, AVIF). The top folder is the pack; folders inside it are categories, each marked as stamps or textures. Duplicates are skipped.
+- Art syncs through OneDrive: the device that imported a pack uploads it in the background; other devices get thumbnails straight away and full-size art when it's used, or the whole pack with **Keep offline**
 - Installable and offline, with dark and light themes
 
 Planned, in order:
 
-1. Art asset library: import packs from a folder or zip on one device, synced to the others through OneDrive (catalogue first, full art downloaded on demand)
-2. Land and water painting with automatic coastlines, terrain textures
-3. Stamps with a scatter brush, curved text labels, layers
-4. Export to PNG/WebP for WorldAtlas Maps
+1. Land and water painting with automatic coastlines, terrain textures
+2. Stamps from the library, with a scatter brush, curved text labels, layers
+3. Export to PNG/WebP for WorldAtlas Maps
 
 ## Art assets
 
 No art is bundled. Asset packs are imported on a device and synced through your OneDrive; they are never committed to this repository (`.gitignore` guards the usual places).
+
+Each image is named by a hash of its contents, so the same file imported twice is stored once, and an uploaded file never changes. Zips can use the usual compression (stored or deflate) but not ZIP64: split archives over 4 GB, or import the unzipped folder. Importing a whole folder needs a desktop browser; on phones, import zips or pick images.
 
 ## 1. Hosting
 
@@ -54,9 +57,12 @@ Each device keeps a full copy in IndexedDB. OneDrive holds:
 Apps/<registration name>/
   projects.json          every map's name and size (and deletions)
   projects/<id>.json     each map's drawing
+  assets.json            the art catalogue: pack, category, size, stamp or texture
+  assets/<hash>.<ext>    full-size art
+  thumbs/<hash>          small previews
 ```
 
-Sync runs shortly after each edit, when the app is reopened or comes back online, and every two minutes. Only maps that changed are transferred. Uploads are guarded by the file's eTag, so if another device wrote first the app downloads, merges and tries again instead of overwriting.
+Sync runs shortly after each edit, when the app is reopened or comes back online, and every two minutes. Only maps that changed are transferred. Art moves in the background afterwards, several files at a time, waiting whenever OneDrive asks to slow down; an interrupted upload picks up where it left off. Uploads are guarded by the file's eTag, so if another device wrote first the app downloads, merges and tries again instead of overwriting.
 
 ## Project layout
 
@@ -68,6 +74,9 @@ js/app.js             boot, routing, top bar
 js/views/*.js         one module per screen
 js/render.js          draws a map document (editor and thumbnails)
 js/store.js           projects and drawings, merge rules
+js/assets.js          art catalogue, importing, pictures on this device
+js/assetsync.js       moving art to and from OneDrive
+js/zip.js             zip reader (no dependencies)
 js/sync.js            OneDrive sync
 js/auth.js            Microsoft sign-in (PKCE), background renewal
 js/db.js              IndexedDB

@@ -6,8 +6,8 @@ importScripts('js/version.js');
 const CACHE = 'cartographer-' + self.AC_VERSION;
 const SHELL = [
   './', 'index.html', 'manifest.webmanifest', 'css/app.css', 'css/editor.css',
-  'js/app.js', 'js/auth.js', 'js/config.js', 'js/db.js', 'js/icons.js', 'js/store.js', 'js/sync.js', 'js/ui.js', 'js/util.js',
-  'js/render.js', 'js/version.js', 'js/views/editor.js', 'js/views/home.js', 'js/views/settings.js',
+  'js/app.js', 'js/assets.js', 'js/assetsync.js', 'js/auth.js', 'js/config.js', 'js/db.js', 'js/icons.js', 'js/store.js', 'js/sync.js', 'js/ui.js', 'js/util.js',
+  'js/render.js', 'js/version.js', 'js/views/editor.js', 'js/views/home.js', 'js/views/settings.js', 'js/views/library.js', 'js/zip.js',
   'fonts/cormorant-garamond-latin-600-normal.woff2', 'fonts/cormorant-garamond-latin-500-italic.woff2',
   'fonts/alegreya-sans-latin-400-normal.woff2', 'fonts/alegreya-sans-latin-500-normal.woff2', 'fonts/alegreya-sans-latin-700-normal.woff2',
   'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/maskable-512.png', 'icons/apple-touch-icon.png',

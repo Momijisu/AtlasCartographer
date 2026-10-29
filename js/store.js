@@ -16,7 +16,12 @@ const docs = new Map(); // project id → document, loaded on first use
 // localRev/syncedRev: edits to the index. docRev/docSynced: edits to each
 // document, by project id. eTags: the OneDrive version of each file we last
 // merged with, by path.
-export let meta = { key: 'sync', localRev: 0, syncedRev: 0, docRev: {}, docSynced: {}, eTags: {}, lastSync: null, folders: false };
+// assetRev/assetSynced: edits to the art catalogue (assets.js). pinned: packs
+// this device keeps fully downloaded.
+export let meta = {
+  key: 'sync', localRev: 0, syncedRev: 0, docRev: {}, docSynced: {}, assetRev: 0, assetSynced: 0,
+  eTags: {}, lastSync: null, folders: 0, pinned: [],
+};
 
 const listeners = new Set();
 export const onChange = (fn) => listeners.add(fn);
@@ -33,7 +38,7 @@ export async function saveMeta(patch) {
   await db.put('meta', meta);
 }
 
-export const isDirty = () => meta.localRev > meta.syncedRev
+export const isDirty = () => meta.localRev > meta.syncedRev || meta.assetRev > meta.assetSynced
   || Object.entries(meta.docRev).some(([id, rev]) => rev > (meta.docSynced[id] || 0));
 export const docDirty = (id) => (meta.docRev[id] || 0) > (meta.docSynced[id] || 0);
 

@@ -84,7 +84,7 @@ export function renderOneDriveCard() {
     if (!(await confirmDialog('Disconnect OneDrive on this device? Your maps stay here and in OneDrive.', 'Disconnect'))) return;
     auth.signOut();
     // Next time, merge with whatever OneDrive holds from scratch.
-    await store.saveMeta({ eTags: {}, folders: false });
+    await store.saveMeta({ eTags: {}, folders: 0 });
     sync.refreshStatus();
   });
   $('#saveCid')?.addEventListener('click', () => {

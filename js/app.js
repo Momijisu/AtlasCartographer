@@ -1,6 +1,7 @@
 // Boot, routing and the top bar.
 //   #/            projects
 //   #/p/<id>      the editor
+//   #/library     art library; #/library/<pack> one pack
 //   #/settings    settings
 import * as store from './store.js';
 import * as auth from './auth.js';
@@ -9,6 +10,8 @@ import { $, toast, timeAgo } from './util.js';
 import { icon } from './icons.js';
 import { viewHome } from './views/home.js';
 import { viewEditor } from './views/editor.js';
+import { viewLibrary, viewPack } from './views/library.js';
+import { loadAssets } from './assets.js';
 import { viewSettings, renderOneDriveCard, applyTheme } from './views/settings.js';
 import { state } from './ui.js';
 
@@ -17,6 +20,7 @@ async function boot() {
   let authError = null, returned = null;
   try { returned = await auth.handleRedirect(); } catch (e) { authError = e; }
   await store.load();
+  await loadAssets();
   wireChrome();
   store.onChange((e) => {
     if (e.local) return;
@@ -71,6 +75,7 @@ async function promptInstall() {
 
 function wireChrome() {
   $('#settingsBtn').innerHTML = icon('gear-six');
+  $('#libraryBtn').innerHTML = icon('squares-four');
   $('#installTop').onclick = promptInstall;
   showInstallButton();
   $('#syncBtn').onclick = () => {
@@ -106,6 +111,8 @@ async function route() {
   try {
     if (page === 'p' && id) await viewEditor(view, id);
     else if (page === 'settings') viewSettings(view);
+    else if (page === 'library' && id) await viewPack(view, decodeURIComponent(h.slice('library/'.length)));
+    else if (page === 'library') await viewLibrary(view);
     else viewHome(view);
   } catch (e) {
     console.error(e);
