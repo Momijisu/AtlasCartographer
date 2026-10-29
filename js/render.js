@@ -123,15 +123,22 @@ export function drawDoc(ctx, project, doc, { image = () => null, placeholder = f
   }
   const st = mapStyle(doc);
   const shadow = st.stampShadow;
-  for (const o of objs) {
-    if (hidden.has(layerOf(o))) continue;
-    if (o.kind === 'stroke') drawStroke(ctx, o);
-    else if (o.kind === 'path') drawPath(ctx, o, st);
-    else if (o.kind === 'stamp') drawStamp(ctx, o, image(o.asset), placeholder, shadow);
+  // Layers bottom to top; within a layer, by z.
+  const order = docLayers(doc).map((l) => l.id).reverse().filter((id) => !hidden.has(id));
+  const lay = layerResolver(doc);
+  const byLayer = new Map(order.map((id) => [id, []]));
+  for (const o of objs) byLayer.get(lay(o))?.push(o);
+  for (const id of order) {
+    for (const o of byLayer.get(id)) {
+      if (o.kind === 'stroke') drawStroke(ctx, o);
+      else if (o.kind === 'path') drawPath(ctx, o, st);
+      else if (o.kind === 'stamp') drawStamp(ctx, o, image(o.asset), placeholder, shadow);
+    }
   }
   finish(ctx, project, st, image);
-  // Labels go on top of everything, so art never covers a name.
-  if (!hidden.has('label')) for (const o of objs) if (o.kind === 'label') drawLabel(ctx, o);
+  // Labels go over the paper, grid and shading too, so names stay crisp;
+  // among themselves they keep their layers' order.
+  for (const id of order) for (const o of byLayer.get(id)) if (o.kind === 'label') drawLabel(ctx, o);
   if (st.frame !== 'none') drawFrame(ctx, project, st.frame);
   if (st.scaleBar !== 'none') drawScaleBar(ctx, project, st);
 }
@@ -260,9 +267,21 @@ export function editorLandScale(project) {
 }
 
 // The map's layers, top to bottom; each holds one kind of object.
-export const LAYERS = [['label', 'Labels'], ['stamp', 'Stamps'], ['stroke', 'Ink and paths'], ['land', 'Land and sea']];
-// Which layer an object is on (layers are named after their main kind).
-export const layerOf = (o) => ({ path: 'stroke', terrain: 'land' }[o.kind] || o.kind);
+//
+// Land and sea is always at the bottom. Above it, the map's own list of
+// layers, top first, kept in its style object: to start with, one for each
+// kind of thing (their ids are the kinds), and any the user adds. Each object
+// is on its `layer`, or its kind's own layer when it has none (or that layer
+// was deleted).
+export const BUILTIN_LAYERS = [{ id: 'label', name: 'Labels' }, { id: 'stamp', name: 'Stamps' }, { id: 'stroke', name: 'Ink and paths' }];
+export const LAND_LAYER = { id: 'land', name: 'Land and sea' };
+export const docLayers = (doc) => (docStyle(doc).layers?.length ? docStyle(doc).layers : BUILTIN_LAYERS);
+export const kindLayer = (o) => ({ path: 'stroke', terrain: 'land' }[o.kind] || o.kind);
+// (object) → the id of the layer it's on, for this map.
+export function layerResolver(doc) {
+  const ids = new Set(docLayers(doc).map((l) => l.id));
+  return (o) => (o.kind === 'land' || o.kind === 'terrain' ? 'land' : o.layer && ids.has(o.layer) ? o.layer : kindLayer(o));
+}
 
 export const docStyle = (doc) => doc?.objects?.style && !doc.objects.style.deleted ? doc.objects.style : {};
 

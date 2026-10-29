@@ -16,7 +16,7 @@ Early. What works today:
 - Map style: sea, land and coastline colours, coastline width, the shore (ripples, engraved hatching or plain), shadows under stamps; and finishing touches: a paper texture over the whole map, square or hex grids, darker edges, a line or double frame, a scale bar
 - Stamps from the art library: place one, or paint many with the scatter brush (randomly chosen from the pictures you pick, nudged, resized and mirrored a little, overlapping front to back). Select a stamp to move, scale (corners), rotate (top handle; Shift snaps to 15°), flip, bring forward, send back or delete. Adjust opacity, tint and brightness. Drag a box (or Shift-click) to select several; duplicate, copy and paste, also between maps
 - Labels: straight or curved text in six fonts, with colour, letter spacing, capitals and a soft outline. Move, rotate and resize them like stamps; Enter or a double-click edits
-- Layers: Labels, Stamps, Ink and paths, and Land and sea. Hide one (saved with the map, and left out of exports) or lock it on this device so it can't be selected or erased. Labels always sit on top
+- Layers: start with Labels, Stamps, and Ink and paths over Land and sea; add your own, rename and reorder them, choose which one you draw on (or Automatic: each kind on its own), and move selected things between them. Hide a layer (saved with the map, and left out of exports) or lock it on this device so it can't be selected or erased. Deleting a layer keeps what's on it. Labels stay above the paper, grid and shading
 - Export as PNG, WebP or JPEG, at full size or smaller, with every stamp's full-size art (ready to upload to WorldAtlas Maps)
 - OneDrive sync of every project, merged stroke by stroke, so edits from two devices both survive
 - Art library: import a folder or zip of images (PNG, WebP, JPEG, GIF, SVG, AVIF). The top folder is the pack; folders inside it are categories, each marked as stamps or textures. Duplicates are skipped.
@@ -25,7 +25,6 @@ Early. What works today:
 
 Planned:
 
-- Custom layers: add, rename and reorder
 - Faster land redraws on very detailed maps
 
 ## Editor shortcuts

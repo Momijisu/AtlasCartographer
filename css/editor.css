@@ -107,8 +107,6 @@ body.editing { overflow: hidden; overscroll-behavior: none; }
 .side-panel header { display: flex; align-items: center; padding: .4rem .4rem .2rem .9rem; }
 .side-panel header b { flex: 1; font: 600 1.3rem/1 var(--display); }
 .layer-row { display: flex; align-items: center; gap: .1rem; padding: .1rem .4rem .1rem .9rem; }
-.layer-row span { flex: 1; }
-.layer-row.off span { color: var(--muted); text-decoration: line-through; }
 .layer-row .icon-btn.on { color: var(--brass); }
 @media (max-width: 600px) { .side-panel { left: .5rem; right: .5rem; width: auto; max-height: 50vh; overflow-y: auto; } }
 
@@ -133,3 +131,15 @@ body.editing { overflow: hidden; overscroll-behavior: none; }
 @media (max-width: 600px) {
   .side-panel, .style-panel { left: .5rem; right: .5rem; width: auto; max-height: 50vh; overflow-y: auto; }
 }
+
+.layers-panel { width: 290px; max-height: calc(100% - 7rem); overflow-y: auto; }
+.layer-row .layer-name { flex: 1; min-width: 0; text-align: left; background: none; border: 0; padding: .45rem .5rem; margin-left: -.5rem; border-radius: 4px;
+  color: var(--text); font: inherit; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.layer-row span.layer-name { cursor: default; }
+.layer-row button.layer-name:hover { background: var(--ink-3); }
+.layer-row.active .layer-name { color: var(--brass); font-weight: 700; }
+.layer-row.active .layer-name::before { content: "● "; font-size: .7em; vertical-align: .15em; }
+.layer-row .layer-name small { color: var(--muted); font-weight: 400; }
+.layer-row.off .layer-name { color: var(--muted); text-decoration: line-through; }
+.icon-gap { width: 38px; flex-shrink: 0; }
+.layers-panel .pk-actions { padding: .5rem .9rem .3rem; }

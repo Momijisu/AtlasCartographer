@@ -9,7 +9,7 @@ import * as images from '../images.js';
 import { $, $$, esc, uid, toast, modal } from '../util.js';
 import { icon } from '../icons.js';
 import { setTitle, state } from '../ui.js';
-import { drawDoc, drawStroke, strokePath, docStyle, STYLE, editorLandScale, labelBox, drawLabel, FONTS, fontCSS, LAYERS, mapStyle, texturePattern, layerOf, drawPath, PATHS } from '../render.js';
+import { drawDoc, drawStroke, strokePath, docStyle, STYLE, editorLandScale, labelBox, drawLabel, FONTS, fontCSS, mapStyle, texturePattern, drawPath, PATHS, docLayers, layerResolver, kindLayer, LAND_LAYER, BUILTIN_LAYERS } from '../render.js';
 import { exportDialog } from '../export.js';
 
 const INKS = ['#2b2118', '#6b4a2b', '#2f5d7c', '#3f6b3a', '#8e2f22'];
@@ -139,6 +139,7 @@ class Editor {
     this.terrainOpacity = load('ac.terrainOpacity', 1);
     this.pickerMode = 'stamp'; // or 'texture': what the picker is choosing
     this.locked = new Set(load(`ac.locked.${project.id}`, [])); // layers this device won't edit
+    this.activeLayer = load(`ac.layer.${project.id}`, null); // layer new things go on; null: each kind's own
     this.brush = load('ac.brush', []).filter((id) => A.asset(id)); // asset ids to stamp with
     this.multi = load('ac.multi', false);
     this.sel = new Set(); // selected stamps and labels
@@ -304,7 +305,7 @@ class Editor {
 
   select(ids) { this.sel = new Set(ids); }
 
-  selectable() { return store.liveObjects(this.doc).filter((o) => (o.kind === 'stamp' || o.kind === 'label') && this.editable(layerOf(o))); }
+  selectable() { return store.liveObjects(this.doc).filter((o) => (o.kind === 'stamp' || o.kind === 'label') && this.editable(this.lay(o))); }
 
   // Stamps and labels can be selected and transformed; this is their box.
   box(o) {
@@ -340,9 +341,10 @@ class Editor {
 
   // The topmost stamp or label under a map point.
   objectAt(mx, my, kinds = ['stamp', 'label']) {
-    // Labels draw on top, so they're found first.
-    const rank = (o) => (o.kind === 'label' ? 1e12 : 0) + (o.z || 0);
-    const list = store.liveObjects(this.doc).filter((o) => kinds.includes(o.kind) && this.editable(layerOf(o))).sort((a, b) => rank(b) - rank(a));
+    // Whatever draws on top is found first: labels, then by layer, then z.
+    const pos = new Map(this.layers().map((l, i, a) => [l.id, a.length - i]));
+    const rank = (o) => (o.kind === 'label' ? 1e15 : 0) + (pos.get(this.lay(o)) || 0) * 1e12 + (o.z || 0);
+    const list = store.liveObjects(this.doc).filter((o) => kinds.includes(o.kind) && this.editable(this.lay(o))).sort((a, b) => rank(b) - rank(a));
     return list.find((o) => this.inBox(o, mx, my)) || null;
   }
 
@@ -354,7 +356,7 @@ class Editor {
     const a = A.asset(ids[Math.floor(Math.random() * ids.length)]);
     const k = size / Math.max(a.w, a.h, 1);
     return {
-      id: uid(), kind: 'stamp', asset: a.id,
+      id: uid(), kind: 'stamp', asset: a.id, ...this.layerField(),
       x: r1(mx), y: r1(my), w: r1(a.w * k), h: r1(a.h * k), rot: 0,
       flip: jitter ? Math.random() < 0.5 : false,
     };
@@ -450,7 +452,7 @@ class Editor {
   hits([mx, my], radius) {
     const out = [];
     for (const o of store.liveObjects(this.doc)) {
-      if (!this.editable(layerOf(o))) continue;
+      if (!this.editable(this.lay(o))) continue;
       if (o.kind === 'stamp' || o.kind === 'label') { if (this.inBox(o, mx, my, radius)) out.push(o); continue; }
       if (o.kind !== 'stroke' && o.kind !== 'path') continue;
       const p = o.points, r = radius + o.width / 2;
@@ -561,23 +563,100 @@ class Editor {
   setHidden(kind, hide) {
     const h = this.hidden();
     if (hide) h.add(kind); else h.delete(kind);
-    if (hide) for (const o of this.selectedObjs()) if (layerOf(o) === kind) this.sel.delete(o.id);
+    if (hide) for (const o of this.selectedObjs()) if (this.lay(o) === kind) this.sel.delete(o.id);
     return this.setStyle({ hidden: [...h] }).then(() => { this.renderLayers(); this.syncToolbar(); });
   }
 
   setLocked(kind, lock) {
     if (lock) this.locked.add(kind); else this.locked.delete(kind);
     keep(`ac.locked.${this.project.id}`, [...this.locked]);
-    if (lock) for (const o of this.selectedObjs()) if (layerOf(o) === kind) this.sel.delete(o.id);
+    if (lock) for (const o of this.selectedObjs()) if (this.lay(o) === kind) this.sel.delete(o.id);
     this.renderLayers(); this.syncToolbar(); this.redraw();
   }
 
+  lay(o) { return layerResolver(this.doc)(o); }
+  layers() { return docLayers(this.doc); }
+  layerName(id) { return (id === 'land' ? LAND_LAYER : this.layers().find((l) => l.id === id))?.name || 'that'; }
+
+  // The layer the current drawing tool puts things on.
+  active() { return this.activeLayer && this.layers().some((l) => l.id === this.activeLayer) ? this.activeLayer : null; }
+  toolLayer() {
+    const kind = TOOL_LAYER[this.tool];
+    return !kind ? null : kind === 'land' ? 'land' : this.active() || kind;
+  }
+  // Fields for a new object: its layer, when one is chosen.
+  layerField() { return this.active() ? { layer: this.active() } : {}; }
+
   // Before drawing on a layer: show it if hidden; refuse if locked.
-  readyLayer(kind) {
-    const name = LAYERS.find(([k]) => k === kind)[1];
-    if (this.locked.has(kind)) { toast(`The ${name} layer is locked`); return false; }
-    if (this.hidden().has(kind)) { this.setHidden(kind, false); toast(`Showing the ${name} layer`); }
+  readyLayer(id) {
+    const name = this.layerName(id);
+    if (this.locked.has(id)) { toast(`The ${name} layer is locked`); return false; }
+    if (this.hidden().has(id)) { this.setHidden(id, false); toast(`Showing the ${name} layer`); }
     return true;
+  }
+
+  setActiveLayer(id) {
+    this.activeLayer = id;
+    keep(`ac.layer.${this.project.id}`, id);
+    this.renderLayers();
+  }
+
+  // Layer list changes, as one undo step with any objects they move.
+  saveLayers(layers, objs = []) {
+    const old = this.doc.objects.style;
+    const base = old && !old.deleted ? clean(old) : { id: 'style', kind: 'style' };
+    return this.commit({
+      undo: [old && !old.deleted ? clean(old) : { id: 'style', deleted: true }, ...objs.map(clean)],
+      redo: [{ ...base, layers }, ...objs.map((o) => ({ ...clean(o), layer: null }))],
+    }).then(() => { this.renderLayers(); this.syncToolbar(); });
+  }
+
+  async addLayer() {
+    const name = await askName('New layer', '');
+    if (!name) return;
+    const id = uid();
+    // New layers go on top, and become the one you draw on.
+    await this.saveLayers([{ id, name }, ...this.layers()]);
+    this.setActiveLayer(id);
+  }
+
+  async layerMenu(id) {
+    const list = this.layers();
+    const i = list.findIndex((l) => l.id === id);
+    const l = list[i];
+    const builtin = BUILTIN_LAYERS.some((b) => b.id === id);
+    const n = this.selectedObjs().length;
+    const act = await modal(l.name, `<form class="form">
+        <label>Name<input name="name" maxlength="60" value="${esc(l.name)}"></label>
+        <div class="actions left">
+          <button type="button" class="btn small" data-a="up" ${i === 0 ? 'disabled' : ''}>${icon('arrow-up')} Up</button>
+          <button type="button" class="btn small" data-a="down" ${i === list.length - 1 ? 'disabled' : ''}>${icon('arrow-down')} Down</button>
+          ${n ? `<button type="button" class="btn small" data-a="move">Move the ${n} selected here</button>` : ''}
+        </div>
+        ${builtin ? '' : '<p class="muted small">Deleting a layer keeps what’s on it: each thing goes back to its usual layer.</p>'}
+        <div class="actions">${builtin ? '' : '<button type="button" class="btn danger" data-a="delete">Delete layer</button><span class="spacer"></span>'}
+          <button type="button" class="btn quiet" data-cancel>Cancel</button><button class="btn primary">Save</button></div>
+      </form>`, {
+      onMount: (m, close) => {
+        $('[data-cancel]', m).onclick = () => close(null);
+        m.addEventListener('click', (e) => { const b = e.target.closest('[data-a]'); if (b && !b.disabled) close({ a: b.dataset.a, name: $('input', m).value.trim() }); });
+        $('form', m).onsubmit = (e) => { e.preventDefault(); close({ a: 'save', name: e.target.name.value.trim() }); };
+      },
+    });
+    if (!act) return;
+    const renamed = list.map((x) => (x.id === id && act.name ? { ...x, name: act.name } : x));
+    if (act.a === 'save') return this.saveLayers(renamed);
+    if (act.a === 'up' || act.a === 'down') {
+      const j = act.a === 'up' ? i - 1 : i + 1;
+      [renamed[i], renamed[j]] = [renamed[j], renamed[i]];
+      return this.saveLayers(renamed);
+    }
+    if (act.a === 'move') return this.editSelected({ layer: id });
+    if (act.a === 'delete') {
+      if (this.activeLayer === id) this.setActiveLayer(null);
+      const on = store.liveObjects(this.doc).filter((o) => o.layer === id);
+      return this.saveLayers(renamed.filter((x) => x.id !== id), on);
+    }
   }
 
   // Opacity, tint and brightness of the selected stamps (shown as the first's).
@@ -656,17 +735,27 @@ class Editor {
     const el = $('.layers-panel', this.root);
     if (!el || el.hidden) return;
     const h = this.hidden();
+    const active = this.active();
+    const row = (l, pickable) => `<div class="layer-row${h.has(l.id) ? ' off' : ''}${pickable && active === l.id ? ' active' : ''}">
+        ${pickable ? `<button class="layer-name" data-pick="${l.id}" title="Draw on this layer">${esc(l.name)}</button>` : `<span class="layer-name">${esc(l.name)}</span>`}
+        <button class="icon-btn" data-eye="${l.id}" title="${h.has(l.id) ? 'Show' : 'Hide (also in exports)'}" aria-pressed="${!h.has(l.id)}">${icon(h.has(l.id) ? 'eye-slash' : 'eye')}</button>
+        <button class="icon-btn${this.locked.has(l.id) ? ' on' : ''}" data-lock="${l.id}" title="${this.locked.has(l.id) ? 'Unlock' : 'Lock: can’t be selected or erased (this device)'}" aria-pressed="${this.locked.has(l.id)}">${icon('lock-simple')}</button>
+        ${pickable ? `<button class="icon-btn" data-menu="${l.id}" title="Rename, reorder, move things here" aria-label="Layer options">${icon('dots-three-vertical')}</button>` : '<span class="icon-gap"></span>'}
+      </div>`;
     el.innerHTML = `<header><b>Layers</b><button class="icon-btn" data-close aria-label="Close">${icon('x')}</button></header>
-      ${LAYERS.map(([k, name]) => `<div class="layer-row${h.has(k) ? ' off' : ''}">
-        <span>${name}</span>
-        <button class="icon-btn" data-eye="${k}" title="${h.has(k) ? 'Show' : 'Hide (also in exports)'}" aria-pressed="${!h.has(k)}">${icon(h.has(k) ? 'eye-slash' : 'eye')}</button>
-        <button class="icon-btn${this.locked.has(k) ? ' on' : ''}" data-lock="${k}" title="${this.locked.has(k) ? 'Unlock' : 'Lock: can’t be selected or erased (this device)'}" aria-pressed="${this.locked.has(k)}">${icon('lock-simple')}</button>
-      </div>`).join('')}`;
+      <div class="layer-row auto${active ? '' : ' active'}"><button class="layer-name" data-pick="">Automatic <small>each kind on its own layer</small></button></div>
+      ${this.layers().map((l) => row(l, true)).join('')}
+      ${row(LAND_LAYER, false)}
+      <div class="pk-actions"><button class="btn small" data-add>${icon('plus')} New layer</button></div>`;
     $('[data-close]', el).onclick = () => { el.hidden = true; };
     el.onclick = (e) => {
       const b = e.target.closest('button');
-      if (b?.dataset.eye) this.setHidden(b.dataset.eye, !h.has(b.dataset.eye));
-      if (b?.dataset.lock) this.setLocked(b.dataset.lock, !this.locked.has(b.dataset.lock));
+      if (!b) return;
+      if (b.dataset.eye) this.setHidden(b.dataset.eye, !h.has(b.dataset.eye));
+      else if (b.dataset.lock) this.setLocked(b.dataset.lock, !this.locked.has(b.dataset.lock));
+      else if (b.dataset.pick != null) this.setActiveLayer(b.dataset.pick || null);
+      else if (b.dataset.menu) this.layerMenu(b.dataset.menu);
+      else if ('add' in b.dataset) this.addLayer();
     };
   }
 
@@ -760,7 +849,7 @@ class Editor {
     };
     const v = await labelDialog({ ...base, text: '' }, 'New label');
     if (!v?.text) return;
-    const o = { id: uid(), kind: 'label', x: r1(mx), y: r1(my), rot: 0, z: this.nextZ(), ...v };
+    const o = { id: uid(), kind: 'label', x: r1(mx), y: r1(my), rot: 0, z: this.nextZ(), ...this.layerField(), ...v };
     this.rememberStyle(v);
     this.select([o.id]);
     if (this.tool !== 'text') this.setTool('select');
@@ -911,14 +1000,14 @@ class Editor {
     const pt = this.local(e);
     const [mx, my] = this.toMap(...pt);
     const panning = this.tool === 'pan' || this.spaceDown || e.button === 1 || e.button === 2;
-    if (!panning && TOOL_LAYER[this.tool] && !this.readyLayer(TOOL_LAYER[this.tool])) { this.pointers.delete(e.pointerId); return; }
+    if (!panning && this.toolLayer() && !this.readyLayer(this.toolLayer())) { this.pointers.delete(e.pointerId); return; }
     if (panning) this.gesture = { kind: 'pan', last: pt };
     else if (this.tool === 'land') {
       // Alt (Option) paints the other way, for quick fixes along a coast.
       const mode = e.altKey ? (this.landMode === 'add' ? 'erase' : 'add') : this.landMode;
       this.gesture = { kind: 'land', stroke: { id: uid(), kind: 'land', mode, width: this.landSize, points: [r1(mx), r1(my)] } };
     } else if (this.tool === 'path') {
-      this.gesture = { kind: 'path', stroke: { id: uid(), kind: 'path', style: this.pathStyle, width: this.pathWidth, points: [r1(mx), r1(my)] } };
+      this.gesture = { kind: 'path', stroke: { id: uid(), kind: 'path', ...this.layerField(), style: this.pathStyle, width: this.pathWidth, points: [r1(mx), r1(my)] } };
     } else if (this.tool === 'terrain') {
       this.gesture = { kind: 'terrain', stroke: { id: uid(), kind: 'terrain', texture: this.terrainTex, width: this.terrainSize, soft: this.terrainSoft, opacity: this.terrainOpacity, points: [r1(mx), r1(my)] } };
     } else if (this.tool === 'text') {
@@ -927,7 +1016,7 @@ class Editor {
       else this.newLabel(mx, my);
       return;
     } else if (this.tool === 'pen') {
-      this.gesture = { kind: 'draw', stroke: { id: uid(), kind: 'stroke', color: this.ink, width: this.width, points: [r1(mx), r1(my)] } };
+      this.gesture = { kind: 'draw', stroke: { id: uid(), kind: 'stroke', ...this.layerField(), color: this.ink, width: this.width, points: [r1(mx), r1(my)] } };
     } else if (this.tool === 'eraser') {
       this.gesture = { kind: 'erase', erased: new Map() };
       this.eraseAt(pt);
@@ -1187,6 +1276,16 @@ function labelDialog(o, title) {
       f.onsubmit = (e) => { e.preventDefault(); close(read()); };
       document.fonts.ready.then(draw);
       draw();
+    },
+  });
+}
+
+function askName(title, value) {
+  return modal(title, `<form class="form"><label>Name<input name="name" maxlength="60" value="${esc(value)}" required></label>
+      <div class="actions"><button type="button" class="btn quiet" data-cancel>Cancel</button><button class="btn primary">Done</button></div></form>`, {
+    onMount: (m, close) => {
+      $('[data-cancel]', m).onclick = () => close(null);
+      $('form', m).onsubmit = (e) => { e.preventDefault(); close(e.target.name.value.trim() || null); };
     },
   });
 }
