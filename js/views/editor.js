@@ -9,7 +9,7 @@ import * as images from '../images.js';
 import { $, $$, esc, uid, toast, modal } from '../util.js';
 import { icon } from '../icons.js';
 import { setTitle, state } from '../ui.js';
-import { drawDoc, drawStroke, strokePath, docStyle, STYLE, editorLandScale, labelBox, drawLabel, FONTS, fontCSS, mapStyle, texturePattern, drawPath, PATHS, docLayers, layerResolver, kindLayer, LAND_LAYER, BUILTIN_LAYERS } from '../render.js';
+import { drawDoc, drawStroke, strokePath, docStyle, STYLE, editorLandScale, labelBox, drawLabel, FONTS, fontCSS, mapStyle, texturePattern, drawPath, PATHS, docLayers, layerResolver, kindLayer, LAND_LAYER, BUILTIN_LAYERS, samplePath, pointsBox, simplify } from '../render.js';
 import { exportDialog } from '../export.js';
 
 const INKS = ['#2b2118', '#6b4a2b', '#2f5d7c', '#3f6b3a', '#8e2f22'];
@@ -228,6 +228,13 @@ class Editor {
     const g = this.gesture;
     if (g?.kind === 'draw') drawStroke(ctx, g.stroke);
     if (g?.kind === 'path') drawPath(ctx, g.stroke, mapStyle(this.doc));
+    if (g?.kind === 'textpath' && g.points.length >= 4) {
+      ctx.strokeStyle = '#c4553b';
+      ctx.lineWidth = 2 / this.s;
+      ctx.setLineDash([6 / this.s, 5 / this.s]);
+      strokePath(ctx, g.points, 2 / this.s);
+      ctx.setLineDash([]);
+    }
     // Land being painted shows as plain land or sea; the coast appears when it's done.
     if (g?.kind === 'land') { const st = mapStyle(this.doc); ctx.fillStyle = ctx.strokeStyle = g.stroke.mode === 'erase' ? st.sea : st.land; strokePath(ctx, g.stroke.points, g.stroke.width); }
     if (g?.kind === 'terrain') {
@@ -252,6 +259,37 @@ class Editor {
     }
   }
 
+  // A path (or text on a path): its points, to drag, and a small "+" between
+  // each pair, to drag out a new point.
+  paintNodes(o) {
+    const { ctx, dpr } = this;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const { nodes, mids } = this.nodes(o);
+    ctx.strokeStyle = '#c4553b';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([5, 4]);
+    ctx.beginPath();
+    nodes.forEach((p, i) => (i ? ctx.lineTo(...p) : ctx.moveTo(...p)));
+    ctx.stroke();
+    ctx.setLineDash([]);
+    for (const [x, y] of mids) {
+      ctx.fillStyle = 'rgba(255, 244, 234, .75)';
+      ctx.beginPath(); ctx.arc(x, y, 4.5, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(x - 2.5, y); ctx.lineTo(x + 2.5, y); ctx.moveTo(x, y - 2.5); ctx.lineTo(x, y + 2.5); ctx.stroke();
+    }
+    ctx.fillStyle = '#fff4ea';
+    for (const [x, y] of nodes) { ctx.beginPath(); ctx.arc(x, y, HANDLE / 2 + 1, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); }
+  }
+
+  // Screen positions of a path's points, and of the midpoints between them.
+  nodes(o) {
+    const p = o[ptsKey(o)];
+    const nodes = [];
+    for (let i = 0; i < p.length; i += 2) nodes.push(this.toScreen(p[i], p[i + 1]));
+    const mids = nodes.slice(1).map((b, i) => [(nodes[i][0] + b[0]) / 2, (nodes[i][1] + b[1]) / 2]);
+    return { nodes, mids };
+  }
+
   // Just the dashed box, for each item of a multiple selection.
   paintOutline(o) {
     const { ctx, dpr } = this;
@@ -269,6 +307,7 @@ class Editor {
 
   // Selection outline with corner handles (scale) and a handle above (rotate).
   paintSelection(o) {
+    if (ptsKey(o)) { this.paintNodes(o); return; }
     const { ctx, dpr } = this;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     const c = this.corners(o).map((p) => this.toScreen(...p));
@@ -305,10 +344,14 @@ class Editor {
 
   select(ids) { this.sel = new Set(ids); }
 
-  selectable() { return store.liveObjects(this.doc).filter((o) => (o.kind === 'stamp' || o.kind === 'label') && this.editable(this.lay(o))); }
+  selectable() { return store.liveObjects(this.doc).filter((o) => SELECTABLE.includes(o.kind) && this.editable(this.lay(o))); }
 
   // Stamps and labels can be selected and transformed; this is their box.
   box(o) {
+    if (o.kind === 'path') {
+      const b = pointsBox(o.points), r = o.width / 2;
+      return { cx: (b[0] + b[2]) / 2, cy: (b[1] + b[3]) / 2, w: b[2] - b[0] + 2 * r, h: b[3] - b[1] + 2 * r, rot: 0 };
+    }
     return o.kind === 'label' ? labelBox(o) : { cx: o.x, cy: o.y, w: o.w, h: o.h, rot: o.rot || 0 };
   }
 
@@ -340,12 +383,24 @@ class Editor {
   }
 
   // The topmost stamp or label under a map point.
-  objectAt(mx, my, kinds = ['stamp', 'label']) {
+  objectAt(mx, my, kinds = SELECTABLE) {
     // Whatever draws on top is found first: labels, then by layer, then z.
     const pos = new Map(this.layers().map((l, i, a) => [l.id, a.length - i]));
     const rank = (o) => (o.kind === 'label' ? 1e15 : 0) + (pos.get(this.lay(o)) || 0) * 1e12 + (o.z || 0);
     const list = store.liveObjects(this.doc).filter((o) => kinds.includes(o.kind) && this.editable(this.lay(o))).sort((a, b) => rank(b) - rank(a));
-    return list.find((o) => this.inBox(o, mx, my)) || null;
+    return list.find((o) => this.hitTest(o, mx, my)) || null;
+  }
+
+  // Is (mx, my) on this object? Paths and text on paths by their line;
+  // everything else by its box.
+  hitTest(o, mx, my) {
+    const slack = 6 / this.s;
+    if (o.kind === 'path') return nearLine(o.points, mx, my, o.width / 2 + slack);
+    if (o.kind === 'label' && o.along) {
+      const line = samplePath(o.along, 8 / this.s).flat();
+      return nearLine(line, mx, my, o.size * 0.6 + slack);
+    }
+    return this.inBox(o, mx, my);
   }
 
   // A new stamp from the brush (a random pick when it holds several), its
@@ -418,6 +473,13 @@ class Editor {
     this.syncToolbar();
   }
 
+  removeNode(o, i) {
+    const key = ptsKey(o), p = o[key].slice();
+    if (p.length <= 4) { toast('A line needs at least two points'); return; }
+    p.splice(2 * i, 2);
+    this.commit({ undo: [clean(o)], redo: [{ ...clean(o), [key]: p, ...(key === 'along' ? { x: p[0], y: p[1] } : {}) }] });
+  }
+
   copySelected() {
     const objs = this.selectedObjs();
     if (!objs.length) return false;
@@ -428,7 +490,7 @@ class Editor {
   // Add copies of objs, moved by (dx, dy), on top, and select them.
   async addCopies(objs, dx, dy) {
     const z = this.nextZ();
-    const copies = objs.map((o, i) => ({ ...o, id: uid(), x: r1(o.x + dx), y: r1(o.y + dy), z: z + i }));
+    const copies = objs.map((o, i) => ({ ...o, ...shifted(o, dx, dy), id: uid(), z: z + i }));
     this.select(copies.map((o) => o.id));
     if (this.tool !== 'select') this.setTool('select');
     await this.commit({ undo: copies.map((o) => ({ id: o.id, deleted: true })), redo: copies });
@@ -493,8 +555,9 @@ class Editor {
     for (const b of $$('[data-for="select"] button', this.root)) b.disabled = !all.length;
     $('[data-act="edit-text"]', this.root).hidden = sel?.kind !== 'label';
     $('[data-act="flip"]', this.root).hidden = !all.some((o) => o.kind === 'stamp');
-    $('[data-act="adjust"]', this.root).hidden = !all.some((o) => o.kind === 'stamp');
-    if (!all.some((o) => o.kind === 'stamp')) $('.adjust-panel', this.root).hidden = true;
+    const adjustable = all.some((o) => o.kind === 'stamp' || o.kind === 'path');
+    $('[data-act="adjust"]', this.root).hidden = !adjustable;
+    if (!adjustable) $('.adjust-panel', this.root).hidden = true;
     else this.renderAdjust();
     this.canvas.style.cursor = panning ? (this.gesture?.kind === 'pan' ? 'grabbing' : 'grab') : this.tool === 'select' ? 'default' : 'crosshair';
     this.renderChip();
@@ -660,32 +723,44 @@ class Editor {
   }
 
   // Opacity, tint and brightness of the selected stamps (shown as the first's).
+  // Settings for what's selected: stamps' opacity, tint and brightness;
+  // paths' style and width. Shows the first one's values.
   renderAdjust() {
     const el = $('.adjust-panel', this.root);
     if (!el || el.hidden) return;
-    const stamps = this.selectedObjs().filter((o) => o.kind === 'stamp');
-    if (!stamps.length) return;
-    const o = stamps[0];
+    const all = this.selectedObjs();
+    const stamps = all.filter((o) => o.kind === 'stamp'), paths = all.filter((o) => o.kind === 'path');
+    if (!stamps.length && !paths.length) return;
     // Don't redraw under a slider that's being dragged.
     if (el.contains(document.activeElement) && document.activeElement.type === 'range') return;
-    el.innerHTML = `<header><b>${stamps.length > 1 ? `${stamps.length} stamps` : 'Stamp'}</b><button class="icon-btn" data-close aria-label="Close">${icon('x')}</button></header>
+    const o = stamps[0], q = paths[0];
+    const title = all.length > 1 ? `${all.length} selected` : o ? 'Stamp' : 'Path';
+    el.innerHTML = `<header><b>${title}</b><button class="icon-btn" data-close aria-label="Close">${icon('x')}</button></header>
       <div class="style-body">
+        ${o ? `${paths.length ? '<div class="field-label">Stamps</div>' : ''}
         <label>Opacity<input type="range" name="opacity" min="0.1" max="1" step="0.05" value="${o.opacity ?? 1}"></label>
         <label class="inline">Tint <input type="color" name="tint" value="${o.tint || '#7a9a5a'}"></label>
         <label>Tint strength<input type="range" name="tintAmt" min="0" max="1" step="0.05" value="${o.tintAmt || 0}"></label>
         <label>Brightness<input type="range" name="bright" min="-1" max="1" step="0.05" value="${o.bright || 0}"></label>
-        <button class="btn small quiet" data-reset>Reset</button>
+        <button class="btn small quiet" data-reset>Reset</button>` : ''}
+        ${q ? `${stamps.length ? '<div class="field-label">Paths</div>' : ''}
+        <label class="inline">Style <select name="pathStyle">${Object.entries(PATHS).map(([k, [name]]) => `<option value="${k}" ${q.style === k ? 'selected' : ''}>${name}</option>`).join('')}</select></label>
+        <label>Width<input type="range" name="pathWidth" min="2" max="160" step="1" value="${q.width}"></label>
+        <p class="muted small">Drag a point to move it, drag a + to add one, Alt-click or double-click a point to remove it.</p>` : ''}
       </div>`;
     $('[data-close]', el).onclick = () => { el.hidden = true; };
-    const apply = (patch) => this.editSelected((x) => (x.kind === 'stamp' ? patch : {}));
+    const toStamps = (patch) => this.editSelected((x) => (x.kind === 'stamp' ? patch : {}));
+    const toPaths = (patch) => this.editSelected((x) => (x.kind === 'path' ? patch : {}));
     el.onchange = (e) => {
       const t = e.target;
       if (!t.name) return;
       const v = t.type === 'range' ? +t.value : t.value;
+      if (t.name === 'pathStyle') return toPaths({ style: v });
+      if (t.name === 'pathWidth') return toPaths({ width: v });
       // Choosing a tint colour with no strength yet gives it some, so it shows.
-      apply(t.name === 'tint' && !(o.tintAmt > 0) ? { tint: v, tintAmt: 0.5 } : { [t.name]: v });
+      toStamps(t.name === 'tint' && !(o.tintAmt > 0) ? { tint: v, tintAmt: 0.5 } : { [t.name]: v });
     };
-    $('[data-reset]', el).onclick = () => apply({ opacity: 1, tintAmt: 0, bright: 0 });
+    $('[data-reset]', el)?.addEventListener('click', () => toStamps({ opacity: 1, tintAmt: 0, bright: 0 }));
   }
 
   // Map style: colours and coast, saved with the map (and undoable).
@@ -841,15 +916,15 @@ class Editor {
 
   // --- labels -----------------------------------------------------------
 
-  async newLabel(mx, my) {
+  async newLabel(mx, my, along = null) {
     const base = {
       font: 'serif', color: INKS[0], spacing: 0.12, curve: 0, caps: false, halo: true,
       size: Math.round(Math.max(this.project.width, this.project.height) / 40),
       ...load('ac.labelStyle', {}),
     };
-    const v = await labelDialog({ ...base, text: '' }, 'New label');
+    const v = await labelDialog({ ...base, text: '', ...(along ? { along, curve: 0 } : {}) }, along ? 'Text along a line' : 'New label');
     if (!v?.text) return;
-    const o = { id: uid(), kind: 'label', x: r1(mx), y: r1(my), rot: 0, z: this.nextZ(), ...this.layerField(), ...v };
+    const o = { id: uid(), kind: 'label', x: r1(mx), y: r1(my), rot: 0, z: this.nextZ(), ...this.layerField(), ...v, ...(along ? { along } : {}) };
     this.rememberStyle(v);
     this.select([o.id]);
     if (this.tool !== 'text') this.setTool('select');
@@ -921,7 +996,13 @@ class Editor {
     this.on(c, 'contextmenu', (e) => e.preventDefault());
     this.on(c, 'dblclick', (e) => {
       if (this.tool !== 'select') return;
-      const hit = this.objectAt(...this.toMap(...this.local(e)), ['label']);
+      const pt = this.local(e), sel = this.selectedObj();
+      // Double-clicking a point of a selected path removes it.
+      if (sel && ptsKey(sel)) {
+        const i = this.nodes(sel).nodes.findIndex((q) => Math.hypot(pt[0] - q[0], pt[1] - q[1]) <= HANDLE);
+        if (i >= 0) { this.removeNode(sel, i); return; }
+      }
+      const hit = this.objectAt(...this.toMap(...pt), ['label']);
       if (hit) this.editLabel(hit);
     });
     // Labels measure their letters, so draw again once the fonts have loaded.
@@ -1012,9 +1093,8 @@ class Editor {
       this.gesture = { kind: 'terrain', stroke: { id: uid(), kind: 'terrain', texture: this.terrainTex, width: this.terrainSize, soft: this.terrainSoft, opacity: this.terrainOpacity, points: [r1(mx), r1(my)] } };
     } else if (this.tool === 'text') {
       const hit = this.objectAt(mx, my, ['label']);
-      if (hit) this.editLabel(hit);
-      else this.newLabel(mx, my);
-      return;
+      if (hit) { this.editLabel(hit); return; }
+      this.gesture = { kind: 'textpath', points: [r1(mx), r1(my)] };
     } else if (this.tool === 'pen') {
       this.gesture = { kind: 'draw', stroke: { id: uid(), kind: 'stroke', ...this.layerField(), color: this.ink, width: this.width, points: [r1(mx), r1(my)] } };
     } else if (this.tool === 'eraser') {
@@ -1042,7 +1122,24 @@ class Editor {
   // a drag on empty map moves the view instead, as everywhere else.
   selectGesture(pt, mx, my, e) {
     const sel = this.selectedObj();
-    if (sel) {
+    if (sel && ptsKey(sel)) {
+      const key = ptsKey(sel), { nodes, mids } = this.nodes(sel);
+      const near = (q) => Math.hypot(pt[0] - q[0], pt[1] - q[1]) <= HANDLE;
+      const i = nodes.findIndex(near);
+      if (i >= 0) {
+        // Alt-click removes a point (a line keeps at least two).
+        if (e.altKey) { this.removeNode(sel, i); return { kind: 'noop' }; }
+        return { kind: 'node', id: sel.id, key, i, orig: clean(sel) };
+      }
+      const j = mids.findIndex(near);
+      if (j >= 0) {
+        const p = sel[key].slice();
+        p.splice(2 * (j + 1), 0, r1(mx), r1(my));
+        this.doc.objects[sel.id] = { ...sel, [key]: p };
+        return { kind: 'node', id: sel.id, key, i: j + 1, orig: clean(sel), moved: true };
+      }
+    }
+    if (sel && !ptsKey(sel)) {
       const rh = this.rotHandle(sel);
       if (Math.hypot(pt[0] - rh[0], pt[1] - rh[1]) <= HANDLE + 4) {
         return { kind: 'rotate', id: sel.id, orig: clean(sel), a0: Math.atan2(my - sel.y, mx - sel.x) };
@@ -1098,7 +1195,7 @@ class Editor {
       const o = g.orig;
       this.doc.objects[g.id] = { ...this.doc.objects[g.id], x: r1(o.x + mx - g.from[0]), y: r1(o.y + my - g.from[1]) };
     } else if (g.kind === 'move') {
-      for (const o of g.origs) this.doc.objects[o.id] = { ...this.doc.objects[o.id], x: r1(o.x + mx - g.from[0]), y: r1(o.y + my - g.from[1]) };
+      for (const o of g.origs) this.doc.objects[o.id] = { ...this.doc.objects[o.id], ...shifted(o, mx - g.from[0], my - g.from[1]) };
       g.moved = true;
     } else if (g.kind === 'marquee') {
       g.b = [mx, my];
@@ -1119,6 +1216,14 @@ class Editor {
       g.moved = true;
     } else if (g.kind === 'scatter') {
       this.scatterAt(mx, my);
+    } else if (g.kind === 'node') {
+      const cur = this.doc.objects[g.id], p = cur[g.key].slice();
+      p[2 * g.i] = r1(mx); p[2 * g.i + 1] = r1(my);
+      this.doc.objects[g.id] = { ...cur, [g.key]: p, ...(g.key === 'along' ? { x: r1(p[0]), y: r1(p[1]) } : {}) };
+      g.moved = true;
+    } else if (g.kind === 'textpath') {
+      const p = g.points;
+      if (Math.hypot(mx - p[p.length - 2], my - p[p.length - 1]) * this.s >= 4) p.push(r1(mx), r1(my));
     }
     this.redraw();
   }
@@ -1135,6 +1240,8 @@ class Editor {
     if (cancelled && g.kind !== 'erase') { this.restore(g); this.syncToolbar(); this.redraw(); return; }
     if (g.kind === 'draw' || g.kind === 'land' || g.kind === 'terrain' || (g.kind === 'path' && g.stroke.points.length >= 4)) {
       const stroke = { ...g.stroke, z: this.nextZ() };
+      // Paths keep only the points that shape them, so they're easy to edit.
+      if (g.kind === 'path') stroke.points = simplify(stroke.points, Math.max(1, 1.5 / this.s));
       this.commit({ undo: [{ id: stroke.id, deleted: true }], redo: [stroke] });
     } else if (g.kind === 'erase' && g.erased.size) {
       const gone = [...g.erased.values()];
@@ -1145,6 +1252,15 @@ class Editor {
       this.commit({ undo: [{ id: o.id, deleted: true }], redo: [o] });
     } else if (g.kind === 'move' && g.moved) {
       this.commit({ undo: g.origs, redo: g.origs.map((o) => clean(this.doc.objects[o.id])) });
+    } else if (g.kind === 'node' && g.moved) {
+      this.commit({ undo: [g.orig], redo: [clean(this.doc.objects[g.id])] });
+    } else if (g.kind === 'textpath') {
+      // A click places an ordinary label; a drag, text along what was drawn.
+      const p = g.points, len = p.length / 2;
+      let L = 0;
+      for (let i = 1; i < len; i++) L += Math.hypot(p[2 * i] - p[2 * i - 2], p[2 * i + 1] - p[2 * i - 1]);
+      if (L * this.s < 24) this.newLabel(p[0], p[1]);
+      else this.newLabel(p[0], p[1], simplify(p, 2.5 / this.s));
     } else if ((g.kind === 'scale' || g.kind === 'rotate') && g.moved) {
       this.commit({ undo: [g.orig], redo: [clean(this.doc.objects[g.id])] });
     } else if (g.kind === 'scatter' && g.placed.length) {
@@ -1163,7 +1279,7 @@ class Editor {
     if (g.kind === 'place') delete this.doc.objects[g.id];
     else if (g.kind === 'scatter') for (const id of g.placed) delete this.doc.objects[id];
     else if (g.kind === 'move') for (const o of g.origs) this.doc.objects[o.id] = { ...this.doc.objects[o.id], ...o };
-    else if (g.kind === 'scale' || g.kind === 'rotate') this.doc.objects[g.id] = { ...this.doc.objects[g.id], ...g.orig };
+    else if (g.kind === 'scale' || g.kind === 'rotate' || g.kind === 'node') this.doc.objects[g.id] = { ...this.doc.objects[g.id], ...g.orig };
   }
 
   abandon() {
@@ -1238,7 +1354,7 @@ function labelDialog(o, title) {
       </div>
       <div class="field-label">Colour</div>
       <div class="swatches label-swatches">${swatches.map((c) => `<button type="button" class="swatch${c === o.color ? ' on' : ''}" data-c="${c}" style="--c:${c}" aria-label="Colour ${c}"></button>`).join('')}</div>
-      <label>Curve <small>bend up or down</small><input name="curve" type="range" min="-100" max="100" step="1" value="${Math.round((o.curve || 0) * 100)}"></label>
+      <label ${o.along ? 'hidden' : ''}>Curve <small>bend up or down</small><input name="curve" type="range" min="-100" max="100" step="1" value="${Math.round((o.curve || 0) * 100)}"></label>
       <label>Letter spacing<input name="spacing" type="range" min="0" max="100" step="1" value="${Math.round((o.spacing || 0) * 100)}"></label>
       <label class="check"><input type="checkbox" name="caps" ${o.caps ? 'checked' : ''}> Capitals</label>
       <label class="check"><input type="checkbox" name="halo" ${o.halo ? 'checked' : ''}> Soft outline, to stand out over busy art</label>
@@ -1288,4 +1404,24 @@ function askName(title, value) {
       $('form', m).onsubmit = (e) => { e.preventDefault(); close(e.target.name.value.trim() || null); };
     },
   });
+}
+
+// Things the select tool can pick up.
+const SELECTABLE = ['stamp', 'label', 'path'];
+
+// Which field holds an object's editable points, if it has them.
+const ptsKey = (o) => (o.kind === 'path' ? 'points' : o.kind === 'label' && o.along ? 'along' : null);
+
+// The fields that change when an object moves by (dx, dy).
+function shifted(o, dx, dy) {
+  const move = (p) => p.map((v, i) => r1(v + (i % 2 ? dy : dx)));
+  if (o.kind === 'path') return { points: move(o.points) };
+  return { x: r1(o.x + dx), y: r1(o.y + dy), ...(o.along ? { along: move(o.along) } : {}) };
+}
+
+// Is (x, y) within r of the polyline p?
+function nearLine(p, x, y, r) {
+  if (p.length === 2) return Math.hypot(p[0] - x, p[1] - y) <= r;
+  for (let i = 0; i < p.length - 2; i += 2) if (segDist(x, y, p[i], p[i + 1], p[i + 2], p[i + 3]) <= r) return true;
+  return false;
 }

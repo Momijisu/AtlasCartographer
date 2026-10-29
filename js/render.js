@@ -534,6 +534,11 @@ function layout(o) {
 
 // The label's bounding box: centre, size and rotation, in map pixels.
 export function labelBox(o) {
+  if (o.along) {
+    // Text on a path: the path's own box, with room for the letters.
+    const b = pointsBox(o.along), pad = o.size * 0.7;
+    return { cx: (b[0] + b[2]) / 2, cy: (b[1] + b[3]) / 2, w: b[2] - b[0] + 2 * pad, h: b[3] - b[1] + 2 * pad, rot: 0 };
+  }
   const { total, bend, R } = layout(o);
   const lineH = o.size * 1.25;
   if (!R) return { cx: o.x, cy: o.y, w: Math.max(total, o.size), h: lineH, rot: o.rot || 0 };
@@ -547,6 +552,7 @@ export function labelBox(o) {
 
 export function drawLabel(ctx, o) {
   if (!o.text) return;
+  if (o.along) { drawAlong(ctx, o); return; }
   const { chars, widths, gap, total, bend, R } = layout(o);
   ctx.save();
   ctx.translate(o.x, o.y);
@@ -599,8 +605,9 @@ export function drawPath(ctx, o, st = STYLE) {
   ctx.save();
   ctx.lineCap = ctx.lineJoin = 'round';
   if (o.style === 'river') {
-    // Short segments, each a little wider than the last: from a quarter of
-    // the width at the source to all of it at the mouth.
+    // Short segments along the smoothed line, each a little wider than the
+    // last: from a quarter of the width at the source to all of it at the mouth.
+    const p = samplePath(o.points, Math.max(2, w / 3)).flat();
     const n = p.length / 2 - 1;
     const pass = (extra, colour) => {
       ctx.strokeStyle = colour;
@@ -632,4 +639,111 @@ function smoothLine(ctx, p, width) {
   for (let i = 2; i < p.length - 2; i += 2) ctx.quadraticCurveTo(p[i], p[i + 1], (p[i] + p[i + 2]) / 2, (p[i + 1] + p[i + 3]) / 2);
   ctx.lineTo(p[p.length - 2], p[p.length - 1]);
   ctx.stroke();
+}
+
+// --- text on a path ---------------------------------------------------------
+//
+// A label with `along` (a flat point list, like a path's) sets its letters
+// along that line, centred, each turned to follow it. Past either end the
+// line carries straight on.
+
+function drawAlong(ctx, o) {
+  const { chars, widths, gap, total } = layout(o);
+  const line = samplePath(o.along, Math.max(1, o.size / 12));
+  if (line.length < 2) return;
+  const lens = [0];
+  for (let i = 1; i < line.length; i++) lens.push(lens[i - 1] + Math.hypot(line[i][0] - line[i - 1][0], line[i][1] - line[i - 1][1]));
+  const L = lens[lens.length - 1];
+  // Position and direction at distance d along the line.
+  const at = (d) => {
+    if (d <= 0 || d >= L) {
+      const [a, b] = d <= 0 ? [line[0], line[1]] : [line[line.length - 2], line[line.length - 1]];
+      const len = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1, ux = (b[0] - a[0]) / len, uy = (b[1] - a[1]) / len;
+      const from = d <= 0 ? a : b, t = d <= 0 ? d : d - L;
+      return [from[0] + ux * t, from[1] + uy * t, Math.atan2(uy, ux)];
+    }
+    let i = 1;
+    while (lens[i] < d) i++;
+    const t = (d - lens[i - 1]) / (lens[i] - lens[i - 1] || 1);
+    const a = line[i - 1], b = line[i];
+    return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, Math.atan2(b[1] - a[1], b[0] - a[0])];
+  };
+  ctx.save();
+  ctx.font = fontCSS(o.font, o.size);
+  ctx.textBaseline = 'middle';
+  ctx.textAlign = 'center';
+  ctx.lineJoin = 'round';
+  const place = (fn) => {
+    let s = (L - total) / 2;
+    chars.forEach((c, i) => {
+      const [x, y, a] = at(s + widths[i] / 2);
+      s += widths[i] + gap;
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(a);
+      fn(c);
+      ctx.restore();
+    });
+  };
+  if (o.halo) {
+    ctx.strokeStyle = HALO;
+    ctx.lineWidth = o.size * 0.16;
+    place((c) => ctx.strokeText(c, 0, 0));
+  }
+  ctx.fillStyle = o.color || '#2b2118';
+  place((c) => ctx.fillText(c, 0, 0));
+  ctx.restore();
+}
+
+// The smoothed curve strokePath draws through p, as points about `step` apart.
+export function samplePath(p, step = 4) {
+  const out = [];
+  if (!p || p.length < 4) return p && p.length >= 2 ? [[p[0], p[1]]] : out;
+  const quad = (x0, y0, cx, cy, x1, y1) => {
+    const n = Math.max(1, Math.ceil((Math.hypot(cx - x0, cy - y0) + Math.hypot(x1 - cx, y1 - cy)) / step));
+    for (let k = 1; k <= n; k++) {
+      const t = k / n, u = 1 - t;
+      out.push([u * u * x0 + 2 * u * t * cx + t * t * x1, u * u * y0 + 2 * u * t * cy + t * t * y1]);
+    }
+  };
+  out.push([p[0], p[1]]);
+  let x = p[0], y = p[1];
+  for (let i = 2; i < p.length - 2; i += 2) {
+    const mx = (p[i] + p[i + 2]) / 2, my = (p[i + 1] + p[i + 3]) / 2;
+    quad(x, y, p[i], p[i + 1], mx, my);
+    x = mx; y = my;
+  }
+  const ex = p[p.length - 2], ey = p[p.length - 1];
+  quad(x, y, (x + ex) / 2, (y + ey) / 2, ex, ey);
+  return out;
+}
+
+export function pointsBox(p) {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (let i = 0; i < p.length; i += 2) { x0 = Math.min(x0, p[i]); x1 = Math.max(x1, p[i]); y0 = Math.min(y0, p[i + 1]); y1 = Math.max(y1, p[i + 1]); }
+  return [x0, y0, x1, y1];
+}
+
+// Fewer points for the same line (Ramer-Douglas-Peucker): points within tol
+// of the line through their neighbours go. Keeps paths light and editable.
+export function simplify(p, tol) {
+  const n = p.length / 2;
+  if (n <= 2) return p.slice();
+  const keep = new Uint8Array(n);
+  keep[0] = keep[n - 1] = 1;
+  const stack = [[0, n - 1]];
+  while (stack.length) {
+    const [a, b] = stack.pop();
+    const ax = p[2 * a], ay = p[2 * a + 1], bx = p[2 * b], by = p[2 * b + 1];
+    const dx = bx - ax, dy = by - ay, len = Math.hypot(dx, dy) || 1;
+    let far = -1, fd = tol;
+    for (let i = a + 1; i < b; i++) {
+      const d = Math.abs((p[2 * i] - ax) * dy - (p[2 * i + 1] - ay) * dx) / len;
+      if (d > fd) { fd = d; far = i; }
+    }
+    if (far >= 0) { keep[far] = 1; stack.push([a, far], [far, b]); }
+  }
+  const out = [];
+  for (let i = 0; i < n; i++) if (keep[i]) out.push(p[2 * i], p[2 * i + 1]);
+  return out;
 }

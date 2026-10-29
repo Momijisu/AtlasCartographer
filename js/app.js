@@ -80,6 +80,7 @@ async function promptInstall() {
 function wireChrome() {
   $('#settingsBtn').innerHTML = icon('gear-six');
   $('#libraryBtn').innerHTML = icon('squares-four');
+  $('#mapsBtn').innerHTML = icon('folder');
   $('#installTop').onclick = promptInstall;
   showInstallButton();
   $('#syncBtn').onclick = () => {
