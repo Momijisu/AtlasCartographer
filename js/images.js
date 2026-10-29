@@ -55,3 +55,13 @@ export function retryMissing() {
     if (!e.img) e.triedThumb = false;
   }
 }
+
+// The full-size picture, waiting for it to load or download (null if it
+// can't be had: not uploaded yet, or offline). For exports.
+export async function full(id) {
+  get(id);
+  const e = cache.get(id);
+  while (e.loading) await e.loading;
+  if (!e.full) { e.triedFull = false; get(id); while (e.loading) await e.loading; }
+  return e.full ? e.img : null;
+}

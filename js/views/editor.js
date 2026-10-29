@@ -10,6 +10,7 @@ import { $, $$, esc, uid, toast } from '../util.js';
 import { icon } from '../icons.js';
 import { setTitle, state } from '../ui.js';
 import { drawDoc, drawStroke, strokePath, docStyle, STYLE } from '../render.js';
+import { exportDialog } from '../export.js';
 
 const INKS = ['#2b2118', '#6b4a2b', '#2f5d7c', '#3f6b3a', '#8e2f22'];
 const TOOLS = [
@@ -39,7 +40,9 @@ export async function viewEditor(view, id) {
   setTitle(project.name);
   document.body.classList.add('editing');
   $('#topSlot').innerHTML = `<a class="icon-btn" href="#/" aria-label="Back to your maps" title="Back to your maps">${icon('arrow-left')}</a>
-    <span class="editor-title" id="edTitle">${esc(project.name)}</span>`;
+    <span class="editor-title" id="edTitle">${esc(project.name)}</span>
+    <button class="btn small quiet" id="exportBtn" title="Export as a picture">${icon('download-simple')}<span class="hide-phone">Export</span></button>`;
+  $('#exportBtn').onclick = () => exportDialog(store.project(id));
   view.innerHTML = `<div class="editor">
       <canvas class="editor-canvas"></canvas>
       <aside class="picker" hidden></aside>

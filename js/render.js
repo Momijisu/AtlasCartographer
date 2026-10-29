@@ -63,14 +63,15 @@ export function drawStamp(ctx, o, img, placeholder = false) {
 }
 
 // image(assetId) → a loaded picture or null (see images.js).
-// landScale: resolution of the land layer relative to the map (it's cached).
-export function drawDoc(ctx, project, doc, { image = () => null, placeholder = false, landScale = 0.5 } = {}) {
+// landScale: resolution of the land layer relative to the map. It's cached
+// for the next frame unless cache is false (one-off renders such as exports).
+export function drawDoc(ctx, project, doc, { image = () => null, placeholder = false, landScale = 0.5, cache = true } = {}) {
   ctx.fillStyle = PAPER;
   ctx.fillRect(0, 0, project.width, project.height);
   if (!doc) return;
   const objs = liveObjects(doc).sort((a, b) => (a.z || 0) - (b.z || 0));
   const land = objs.filter((o) => o.kind === 'land');
-  if (land.length) ctx.drawImage(landLayer(project, doc, land, landScale, image), 0, 0, project.width, project.height);
+  if (land.length) ctx.drawImage(landLayer(project, doc, land, landScale, image, cache), 0, 0, project.width, project.height);
   for (const o of objs) {
     if (o.kind === 'stroke') drawStroke(ctx, o);
     else if (o.kind === 'stamp') drawStamp(ctx, o, image(o.asset), placeholder);
@@ -99,9 +100,10 @@ const layers = new Map(); // `${project.id}:${scale}` → { sig, canvas }
 
 export const docStyle = (doc) => doc?.objects?.style && !doc.objects.style.deleted ? doc.objects.style : {};
 
-function landLayer(project, doc, land, scale, image) {
+function landLayer(project, doc, land, scale, image, cache) {
   const style = docStyle(doc);
   const tex = style.landTexture ? image(style.landTexture) : null;
+  if (!cache) return renderLand(project, land, scale, tex);
   const sig = land.map((o) => o.id + ':' + o.updatedAt).join() + `|${project.width}x${project.height}|${style.landTexture || ''}:${tex ? tex.naturalWidth : 0}`;
   const key = `${project.id}:${scale}`;
   const hit = layers.get(key);

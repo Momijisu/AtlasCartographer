@@ -12,6 +12,7 @@ Early. What works today:
 - Editor: pan and zoom (mouse, wheel, touch, pinch), an ink pen in five colours, an eraser, undo and redo
 - Land and water: paint land, carve water (or hold Alt to switch), and the coastline, its outline and ripple rings in the sea draw themselves. Fill the land with any texture from the library
 - Stamps from the art library: place one, or paint many with the scatter brush (randomly chosen from the pictures you pick, nudged, resized and mirrored a little, overlapping front to back). Select a stamp to move, scale (corners), rotate (top handle; Shift snaps to 15°), flip, bring forward, send back or delete
+- Export as PNG, WebP or JPEG, at full size or smaller, with every stamp's full-size art (ready to upload to WorldAtlas Maps)
 - OneDrive sync of every project, merged stroke by stroke, so edits from two devices both survive
 - Art library: import a folder or zip of images (PNG, WebP, JPEG, GIF, SVG, AVIF). The top folder is the pack; folders inside it are categories, each marked as stamps or textures. Duplicates are skipped.
 - Art syncs through OneDrive: the device that imported a pack uploads it in the background; other devices get thumbnails straight away and full-size art when it's used, or the whole pack with **Keep offline**
@@ -21,7 +22,7 @@ Planned, in order:
 
 1. Curved text labels, layers
 2. More land styles: coast colours and widths, painted terrain textures (forest floor, desert…) over the land
-3. Export to PNG/WebP for WorldAtlas Maps
+3. Sharper land when zoomed far in (the land layer is drawn at up to 2048 pixels across)
 
 ## Editor shortcuts
 
@@ -88,6 +89,7 @@ js/app.js             boot, routing, top bar
 js/views/*.js         one module per screen
 js/render.js          draws a map document (editor and thumbnails)
 js/images.js          decoded art for drawing, loading full size on demand
+js/export.js          full-size picture export
 js/store.js           projects and drawings, merge rules
 js/assets.js          art catalogue, importing, pictures on this device
 js/assetsync.js       moving art to and from OneDrive
