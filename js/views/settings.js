@@ -158,9 +158,9 @@ export function renderOneDriveCard() {
       <p><button class="btn primary" id="connectBtn">Reconnect OneDrive</button> <button class="btn quiet" id="disconnectBtn">Disconnect</button></p>`;
   } else {
     main = `<p>Connected as <b>${esc(acct?.name || '')}</b> <span class="muted">${esc(acct?.username || '')}</span></p>
-      <p>Status: <b class="status-${st.state}">${esc({ synced: 'Up to date', syncing: 'Syncing…', pending: 'Changes waiting to upload', offline: 'Offline', error: 'Error' }[st.state] || st.state)}</b>
+      <p>Status: <b class="status-${st.state}">${esc({ synced: 'Up to date', syncing: 'Syncing…', pending: 'Changes waiting to upload', offline: 'Offline', error: 'Error', busy: 'OneDrive busy, trying again shortly' }[st.state] || st.state)}</b>
       <span class="muted">· last synced ${timeAgo(store.meta.lastSync)}</span></p>
-      ${st.state === 'error' ? `<p class="warn">${esc(st.message)}</p>` : ''}
+      ${st.state === 'error' || st.state === 'busy' ? `<p class="${st.state === 'error' ? 'warn' : 'muted'}">${esc(st.message)}</p>` : ''}
       <p><button class="btn primary" id="syncNowBtn">${icon('arrows-clockwise')} Sync now</button> <button class="btn quiet" id="disconnectBtn">Disconnect</button></p>`;
   }
   el.innerHTML = `<h2>OneDrive sync</h2>${main}

@@ -102,7 +102,7 @@ function renderSyncBadge({ state: st, message }) {
   const btn = $('#syncBtn');
   const labels = {
     off: ['cloud-slash', 'Local only'], syncing: ['arrows-clockwise', 'Syncing'], synced: ['cloud-check', 'Synced'],
-    pending: ['cloud-arrow-up', 'Unsynced'], offline: ['cloud-slash', 'Offline'], error: ['warning', 'Sync error'], reauth: ['warning', 'Reconnect'],
+    pending: ['cloud-arrow-up', 'Unsynced'], offline: ['cloud-slash', 'Offline'], error: ['warning', 'Sync error'], reauth: ['warning', 'Reconnect'], busy: ['arrows-clockwise', 'Busy'],
   };
   const [ic, text] = labels[st];
   btn.className = 'sync-badge ' + st;

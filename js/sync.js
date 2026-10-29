@@ -37,6 +37,7 @@ export function refreshStatus() {
 }
 
 let running = null;
+let busyTimer = null;
 let again = false;
 export function sync() {
   if (running) { again = true; return running; }
@@ -73,12 +74,36 @@ async function run() {
     setStatus(store.isDirty() ? 'pending' : 'synced');
     assetsync.kick();
   } catch (e) {
+    if (e instanceof Busy) {
+      const wait = Math.max(30, e.wait);
+      setStatus('busy', `OneDrive asked to slow down. Trying again in ${wait < 90 ? `${wait} seconds` : `${Math.round(wait / 60)} minutes`}.`);
+      clearTimeout(busyTimer);
+      busyTimer = setTimeout(sync, wait * 1000);
+      return;
+    }
     console.error('Sync failed', e);
     // A lapsed session: try renewing in the background before asking.
     if (e instanceof auth.ReauthRequired && await auth.renewSilently()) { again = true; return; }
     if (e instanceof auth.ReauthRequired) setStatus('reauth', e.message);
     else if (!navigator.onLine) setStatus('offline', 'Offline. Changes are saved on this device.');
     else setStatus('error', e.message || String(e));
+  }
+}
+
+// OneDrive throttles busy apps with 429 (or 503) and says how long to wait.
+// Short waits are waited out, twice at most; anything longer pauses syncing
+// until then, shown as "busy" rather than as an error.
+class Busy extends Error {
+  constructor(wait) { super('OneDrive asked to slow down'); this.wait = wait; }
+}
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+async function graph(path, opts) {
+  for (let attempt = 0; ; attempt++) {
+    const res = await auth.graph(path, opts);
+    if (res.status !== 429 && res.status !== 503) return res;
+    const wait = +res.headers.get('Retry-After') || 10;
+    if (wait > 20 || attempt >= 2) throw new Busy(wait);
+    await sleep(wait * 1000);
   }
 }
 
@@ -103,7 +128,7 @@ async function check(res, what) {
 async function syncFile(path, { merge, collect, dirty, hasLocal, remoteETag, agreed }) {
   let item = null;
   const readItem = async () => {
-    const res = await auth.graph(`${ROOT}/${path}`);
+    const res = await graph(`${ROOT}/${path}`);
     item = res.status === 404 ? null : await (await check(res, 'Reading OneDrive')).json();
     remoteETag = item?.eTag || null;
   };
@@ -122,7 +147,7 @@ async function syncFile(path, { merge, collect, dirty, hasLocal, remoteETag, agr
   // Snapshot now: the upload (and the sync baseline) cover exactly this state.
   const snap = await collect();
   if (localAhead) {
-    const res = await auth.graph(`${ROOT}/${path}:/content`, {
+    const res = await graph(`${ROOT}/${path}:/content`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json', ...(remoteETag ? { 'If-Match': remoteETag } : { 'If-None-Match': '*' }) },
       body: JSON.stringify({ app: 'AtlasCartographer', version: 1, savedAt: Date.now(), ...snap.body }),
@@ -179,7 +204,7 @@ async function listDocs() {
   const out = new Map();
   let url = `${ROOT}/projects:/children?$select=name,eTag&$top=200`;
   while (url) {
-    const res = await auth.graph(url);
+    const res = await graph(url);
     if (res.status === 404) break;
     const json = await (await check(res, 'Listing projects')).json();
     for (const it of json.value) out.set(`projects/${it.name}`, it.eTag);
@@ -191,7 +216,7 @@ async function listDocs() {
 async function removeRemoteDoc(id, remote) {
   const path = docPath(id);
   if (remote.has(path)) {
-    const res = await auth.graph(`${ROOT}/${path}`, { method: 'DELETE' });
+    const res = await graph(`${ROOT}/${path}`, { method: 'DELETE' });
     if (res.status !== 404) await check(res, 'Deleting a project from OneDrive');
   }
   if (path in store.meta.eTags) {

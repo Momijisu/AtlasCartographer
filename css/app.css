@@ -180,7 +180,7 @@ label.inline, label.check { display: flex; align-items: center; gap: .6rem; }
 }
 .sync-badge:hover { border-color: var(--rule-strong); }
 .sync-badge.synced { color: var(--ok); }
-.sync-badge.pending, .sync-badge.syncing { color: var(--brass); }
+.sync-badge.pending, .sync-badge.syncing, .sync-badge.busy { color: var(--brass); }
 .sync-badge.error, .sync-badge.reauth { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 50%, transparent); }
 .sync-badge.syncing .i { animation: spin 1.2s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
