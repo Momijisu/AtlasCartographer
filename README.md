@@ -13,7 +13,7 @@ Early. What works today:
 - Land and water: paint land, carve water (or hold Alt to switch), and the coastline, its outline and ripple rings in the sea draw themselves. Fill the land with any texture from the library. On PC the land is drawn at the map's full resolution; phones and tablets use a lighter version (Settings → Land detail)
 - Terrain: paint any library texture onto the land (grass, forest floor, sand…) with soft edges; it stops at the coast. Paint "Base land" to take it back off
 - Paths: roads (dashed), trails (dotted), borders (dash-dot), and rivers that widen towards the mouth
-- Map style: sea, land and coastline colours, coastline width, how many ripples, and shadows under stamps
+- Map style: sea, land and coastline colours, coastline width, how many ripples, shadows under stamps; and finishing touches: a paper texture over the whole map, square or hex grids, darker edges, a line or double frame
 - Stamps from the art library: place one, or paint many with the scatter brush (randomly chosen from the pictures you pick, nudged, resized and mirrored a little, overlapping front to back). Select a stamp to move, scale (corners), rotate (top handle; Shift snaps to 15°), flip, bring forward, send back or delete. Drag a box (or Shift-click) to select several; duplicate, copy and paste, also between maps
 - Labels: straight or curved text in six fonts, with colour, letter spacing, capitals and a soft outline. Move, rotate and resize them like stamps; Enter or a double-click edits
 - Layers: Labels, Stamps, Ink and paths, and Land and sea. Hide one (saved with the map, and left out of exports) or lock it on this device so it can't be selected or erased. Labels always sit on top
@@ -25,7 +25,7 @@ Early. What works today:
 
 Planned:
 
-- Overlays and finishing: paper texture, grids, frames, compass roses, scale bars
+- Scale bars
 - Tinting stamps
 
 ## Editor shortcuts

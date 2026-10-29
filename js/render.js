@@ -93,8 +93,74 @@ export function drawDoc(ctx, project, doc, { image = () => null, placeholder = f
     else if (o.kind === 'path') drawPath(ctx, o, st);
     else if (o.kind === 'stamp') drawStamp(ctx, o, image(o.asset), placeholder, shadow);
   }
+  finish(ctx, project, st, image);
   // Labels go on top of everything, so art never covers a name.
   if (!hidden.has('label')) for (const o of objs) if (o.kind === 'label') drawLabel(ctx, o);
+  if (st.frame !== 'none') drawFrame(ctx, project, st.frame);
+}
+
+// --- finishing: paper texture, grid, vignette, frame ----------------------
+
+function finish(ctx, project, st, image) {
+  const { width: W, height: H } = project;
+  const paper = st.overlay && image(st.overlay);
+  if (paper && st.overlayOpacity > 0) {
+    // Multiplied over everything, like printing the map onto that paper.
+    ctx.save();
+    ctx.globalCompositeOperation = 'multiply';
+    ctx.globalAlpha = st.overlayOpacity;
+    ctx.fillStyle = texturePattern(ctx, paper, { textureSize: Math.max(W, H) / 4 });
+    ctx.fillRect(0, 0, W, H);
+    ctx.restore();
+  }
+  if (st.grid !== 'none' && st.gridSize > 4) {
+    ctx.save();
+    ctx.strokeStyle = `rgba(40, 30, 20, ${st.gridOpacity})`;
+    ctx.lineWidth = Math.max(1, st.gridSize / 60);
+    ctx.beginPath();
+    const g = st.gridSize;
+    if (st.grid === 'square') {
+      for (let x = g; x < W; x += g) { ctx.moveTo(x, 0); ctx.lineTo(x, H); }
+      for (let y = g; y < H; y += g) { ctx.moveTo(0, y); ctx.lineTo(W, y); }
+    } else {
+      // Flat-topped hexagons, gridSize across.
+      const r = g / 2, h = Math.sqrt(3) * r;
+      for (let col = 0, cx = 0; cx < W + g; col++, cx += r * 1.5) {
+        for (let cy = col % 2 ? h / 2 : 0; cy < H + h; cy += h) {
+          for (let i = 0; i < 6; i++) {
+            const a = (Math.PI / 3) * i, b = (Math.PI / 3) * (i + 1);
+            // Each hexagon draws its top three edges; neighbours supply the rest.
+            if (i < 3) continue;
+            ctx.moveTo(cx + r * Math.cos(a), cy + r * Math.sin(a));
+            ctx.lineTo(cx + r * Math.cos(b), cy + r * Math.sin(b));
+          }
+        }
+      }
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
+  if (st.vignette > 0) {
+    const grad = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.35, W / 2, H / 2, Math.hypot(W, H) / 2);
+    grad.addColorStop(0, 'rgba(50, 32, 15, 0)');
+    grad.addColorStop(1, `rgba(50, 32, 15, ${st.vignette * 0.7})`);
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, W, H);
+  }
+}
+
+function drawFrame(ctx, project, kind) {
+  const { width: W, height: H } = project;
+  const u = Math.max(W, H) / 400;
+  ctx.save();
+  ctx.strokeStyle = '#2b2118';
+  ctx.lineWidth = u * 1.6;
+  ctx.strokeRect(u * 6, u * 6, W - u * 12, H - u * 12);
+  if (kind === 'double') {
+    ctx.lineWidth = u * 0.6;
+    ctx.strokeRect(u * 9, u * 9, W - u * 18, H - u * 18);
+  }
+  ctx.restore();
 }
 
 // Render the whole map into a canvas no bigger than maxW × maxH.
@@ -138,9 +204,11 @@ export const layerOf = (o) => ({ path: 'stroke', terrain: 'land' }[o.kind] || o.
 export const docStyle = (doc) => doc?.objects?.style && !doc.objects.style.deleted ? doc.objects.style : {};
 
 // The map's look: STYLE, with whatever the map's style object overrides.
-const STYLE_KEYS = ['sea', 'coast', 'land', 'coastWidth', 'rippleCount', 'stampShadow'];
+const STYLE_KEYS = ['sea', 'coast', 'land', 'coastWidth', 'rippleCount', 'stampShadow',
+  'grid', 'gridSize', 'gridOpacity', 'vignette', 'frame', 'overlay', 'overlayOpacity'];
+const FINISH = { grid: 'none', gridSize: 128, gridOpacity: 0.25, vignette: 0, frame: 'none', overlay: null, overlayOpacity: 0.35 };
 export function mapStyle(doc) {
-  const d = docStyle(doc), st = { ...STYLE, rippleCount: STYLE.ripples.length, stampShadow: false };
+  const d = docStyle(doc), st = { ...STYLE, ...FINISH, rippleCount: STYLE.ripples.length, stampShadow: false };
   for (const k of STYLE_KEYS) if (d[k] != null) st[k] = d[k];
   // Rings spread evenly out to the default outermost one, however many there are.
   const far = Math.max(...STYLE.ripples);

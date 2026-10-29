@@ -584,6 +584,14 @@ class Editor {
         <label>Coastline width<input type="range" name="coastWidth" min="0" max="24" step="1" value="${st.coastWidth}"></label>
         <label>Ripples in the sea<input type="range" name="rippleCount" min="0" max="6" step="1" value="${st.rippleCount}"></label>
         <label class="check"><input type="checkbox" name="stampShadow" ${st.stampShadow ? 'checked' : ''}> Shadows under stamps</label>
+        <div class="field-label">Finishing</div>
+        <label class="inline">Grid <select name="grid">${[['none', 'None'], ['square', 'Squares'], ['hex', 'Hexes']].map(([v, n]) => `<option value="${v}" ${st.grid === v ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
+        ${st.grid !== 'none' ? `<label>Grid size<input type="range" name="gridSize" min="32" max="768" step="8" value="${st.gridSize}"></label>
+        <label>Grid strength<input type="range" name="gridOpacity" min="0.05" max="0.8" step="0.05" value="${st.gridOpacity}"></label>` : ''}
+        <label>Darker edges<input type="range" name="vignette" min="0" max="1" step="0.05" value="${st.vignette}"></label>
+        <label class="inline">Frame <select name="frame">${[['none', 'None'], ['line', 'Line'], ['double', 'Double line']].map(([v, n]) => `<option value="${v}" ${st.frame === v ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
+        <div class="inline-row"><span>Paper</span><button type="button" class="btn small" data-paper>${st.overlay ? 'Change…' : 'Choose…'}</button></div>
+        ${st.overlay ? `<label>Paper strength<input type="range" name="overlayOpacity" min="0.05" max="1" step="0.05" value="${st.overlayOpacity}"></label>` : ''}
         <button class="btn small quiet" data-reset>Reset to the defaults</button>
       </div>`;
     $('[data-close]', el).onclick = () => { el.hidden = true; };
@@ -592,9 +600,13 @@ class Editor {
       const t = e.target;
       if (!t.name) return;
       const v = t.type === 'checkbox' ? t.checked : t.type === 'range' ? +t.value : t.value;
-      this.setStyle({ [t.name]: v });
+      this.setStyle({ [t.name]: v }).then(() => { if (t.name === 'grid') this.renderStylePanel(); });
     };
-    $('[data-reset]', el).onclick = () => this.setStyle({ sea: null, land: null, coast: null, coastWidth: null, rippleCount: null, stampShadow: null }).then(() => this.renderStylePanel());
+    $('[data-paper]', el).onclick = () => this.openPicker('overlay');
+    $('[data-reset]', el).onclick = () => this.setStyle({
+      sea: null, land: null, coast: null, coastWidth: null, rippleCount: null, stampShadow: null,
+      grid: null, gridSize: null, gridOpacity: null, vignette: null, frame: null, overlay: null, overlayOpacity: null,
+    }).then(() => this.renderStylePanel());
   }
 
   renderLayers() {
@@ -625,9 +637,14 @@ class Editor {
     // 'terrain' (the texture the terrain tool paints).
     const mode = this.pickerMode;
     const tex = mode !== 'stamp';
-    const title = { stamp: 'Stamps', texture: 'Land texture', terrain: 'Terrain' }[mode];
-    const plainLabel = mode === 'terrain' ? 'Base land' : 'Plain land';
-    const plain = () => (mode === 'terrain' ? this.setTerrainTex(null) : this.setLandTexture(null));
+    const title = { stamp: 'Stamps', texture: 'Land texture', terrain: 'Terrain', overlay: 'Paper' }[mode];
+    const plainLabel = { terrain: 'Base land', overlay: 'No paper' }[mode] || 'Plain land';
+    const pick = (id) => {
+      if (mode === 'terrain') this.setTerrainTex(id);
+      else if (mode === 'overlay') this.setStyle({ overlay: id });
+      else this.setLandTexture(id);
+    };
+    const plain = () => pick(null);
     const packs = A.packs().map((p) => ({ ...p, categories: p.categories.filter((c) => c.kind === (tex ? 'texture' : 'stamp')) })).filter((p) => p.categories.length);
     if (!packs.length) {
       el.innerHTML = `<header><b>${title}</b><button class="icon-btn" data-close aria-label="Close">${icon('x')}</button></header>
@@ -642,7 +659,7 @@ class Editor {
     const cat = pack.categories.find((c) => c.name === load(kc, '')) || pack.categories[0];
     const list = A.liveAssets().filter((a) => a.pack === pack.name && a.category === cat.name)
       .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
-    const chosen = new Set(mode === 'texture' ? [docStyle(this.doc).landTexture] : mode === 'terrain' ? [this.terrainTex] : this.brush);
+    const chosen = new Set(mode === 'texture' ? [docStyle(this.doc).landTexture] : mode === 'terrain' ? [this.terrainTex] : mode === 'overlay' ? [docStyle(this.doc).overlay] : this.brush);
     el.innerHTML = `<header><b>${title}</b>
         ${tex ? '' : `<label class="check small"><input type="checkbox" class="pk-multi" ${this.multi ? 'checked' : ''}> Pick several</label>`}
         <button class="icon-btn" data-close aria-label="Close">${icon('x')}</button></header>
@@ -664,7 +681,7 @@ class Editor {
       if (!t) return;
       const id = t.dataset.id;
       if (tex) {
-        if (mode === 'terrain') this.setTerrainTex(id); else this.setLandTexture(id);
+        pick(id);
         for (const x of $$('.tile', el)) x.classList.toggle('on', x === t);
         return;
       }

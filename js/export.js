@@ -49,6 +49,8 @@ export async function renderMap(project, { type = 'image/png', scale = 1 } = {})
   const tex = doc.objects.style && !doc.objects.style.deleted && doc.objects.style.landTexture;
   if (tex) ids.push(tex);
   for (const t of store.liveObjects(doc)) if (t.kind === 'terrain' && t.texture && !ids.includes(t.texture)) ids.push(t.texture);
+  const paper = doc.objects.style && !doc.objects.style.deleted && doc.objects.style.overlay;
+  if (paper && !ids.includes(paper)) ids.push(paper);
   const pics = new Map();
   let missing = 0;
   await Promise.all(ids.map(async (id) => { const img = await images.full(id); if (img) pics.set(id, img); else missing++; }));

@@ -109,3 +109,7 @@ body.editing { overflow: hidden; overscroll-behavior: none; }
 .path-style button { padding: .4em .6em; }
 .toolbar .path-width { width: 80px; min-height: 0; padding: 0; flex-shrink: 0; accent-color: var(--rubric); background: transparent; border: 0; }
 @media (max-width: 600px) { .path-style button { padding: .4em .45em; font-size: .8rem; } .toolbar .path-width { width: 60px; } }
+.style-body .field-label { margin: .9rem 0 .5rem; }
+.style-body select { width: auto; min-height: 30px; padding: .2em .4em; font-size: .88rem; }
+.inline-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: .55rem; font-size: .88rem; color: var(--text-2); }
+.style-panel { max-height: calc(100% - 7rem); overflow-y: auto; }
