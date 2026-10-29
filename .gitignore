@@ -1,0 +1,7 @@
+.DS_Store
+node_modules/
+
+# Art assets are imported into the app on each device and synced through
+# OneDrive. They must never be committed here.
+assets-local/
+*.zip

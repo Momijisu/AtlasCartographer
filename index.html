@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <script>
+    // Background sign-in renewal (js/auth.js) loads this page in a hidden frame:
+    // hand Microsoft's answer to the app and stop, instead of starting a second copy.
+    if (window.parent !== window && /[?&](code|error)=/.test(location.search)) {
+      parent.postMessage({ acAuth: location.search }, location.origin);
+      window.stop();
+    }
+  </script>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>AtlasCartographer</title>
+  <meta name="description" content="A fantasy map maker that works offline and syncs through your OneDrive.">
+  <meta name="theme-color" content="#161411">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="stylesheet" href="css/app.css">
+  <link rel="stylesheet" href="css/editor.css">
+  <link rel="preload" href="fonts/cormorant-garamond-latin-600-normal.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="fonts/alegreya-sans-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin>
+  <script src="js/version.js"></script>
+  <script type="module" src="js/app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#/"><img src="icons/icon.svg" alt=""><span>Atlas<b>Cartographer</b></span></a>
+    <div class="topbar-slot" id="topSlot"></div>
+    <button class="btn small primary" id="installTop" hidden title="Install AtlasCartographer as an app">Install</button>
+    <button class="sync-badge off" id="syncBtn" aria-label="Sync status"></button>
+    <a class="icon-btn" id="settingsBtn" href="#/settings" aria-label="Settings" title="Settings"></a>
+  </header>
+  <main id="view"><div class="loading">Unrolling the maps…</div></main>
+  <div id="modal-root"></div>
+  <div id="toast" role="status" aria-live="polite"></div>
+</body>
+</html>
