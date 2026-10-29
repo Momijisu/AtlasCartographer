@@ -13,6 +13,20 @@ export const SIZES = [
   { label: 'Portrait', width: 3072, height: 4096 },
 ];
 
+// Map types: the same editor and tools for every map; the
+// type sets where a new map starts (its surface, grid and size) and which art
+// packs the picker shows first. All of it can be changed later in Map style.
+export const MAP_TYPES = {
+  world: { label: 'World', note: 'Starts as sea: paint the continents.', style: { surface: 'sea' } },
+  region: { label: 'Region', note: 'Starts as sea: paint the coast and land.', style: { surface: 'sea' } },
+  city: { label: 'City', note: 'Starts as land: carve rivers and harbours with the water brush.', style: { surface: 'ground' } },
+  battlemap: { label: 'Battlemap', note: 'Starts as ground, with a square grid.', style: { surface: 'ground', land: '#a39f78', coastStyle: 'plain', grid: 'square', gridOpacity: 0.35 } },
+};
+export const typeLabel = (t) => MAP_TYPES[t]?.label || '';
+// Battlemaps are measured in squares; virtual tabletops commonly use these sizes.
+const SQUARE_PX = [70, 100, 140, 200];
+const MAX_SIDE = 8192;
+
 export function viewHome(view) {
   setTitle('');
   const list = store.live();
@@ -22,7 +36,7 @@ export function viewHome(view) {
     ${list.length ? `<div class="project-grid">${list.map((p) => `
       <a class="project-card" href="#/p/${p.id}">
         <canvas data-thumb="${p.id}" width="4" height="3"></canvas>
-        <div class="meta"><h3>${esc(p.name)}</h3><div class="sub">${p.width} × ${p.height} · edited ${timeAgo(p.updatedAt)}</div></div>
+        <div class="meta"><h3>${esc(p.name)}</h3><div class="sub">${p.type ? `${typeLabel(p.type)} · ` : ''}${p.width} × ${p.height} · edited ${timeAgo(p.updatedAt)}</div></div>
         <button class="icon-btn" data-menu="${p.id}" aria-label="Rename or delete" title="Rename or delete">${icon('dots-three-vertical')}</button>
       </a>`).join('')}</div>`
     : `<div class="empty-state">${icon('map-trifold', 'empty-emblem')}<h2>No maps yet</h2>
@@ -43,28 +57,69 @@ export function viewHome(view) {
 function newProjectDialog() {
   return modal('New map', `<form class="form">
       <label>Name<input name="name" required maxlength="120" placeholder="The Shattered Coast"></label>
-      <div class="field-label">Size</div>
-      <div class="seg" id="sizeSeg">${SIZES.map((s, i) => `<button type="button" data-i="${i}" class="${i ? '' : 'on'}">${s.label}</button>`).join('')}</div>
-      <p class="muted small" id="sizeNote"></p>
+      <div class="field-label">Type</div>
+      <div class="seg" id="typeSeg">${Object.entries(MAP_TYPES).map(([k, t], i) => `<button type="button" data-t="${k}" class="${i ? '' : 'on'}">${t.label}</button>`).join('')}</div>
+      <p class="muted small" id="typeNote"></p>
+      <div id="sizeBox"></div>
       <div class="actions"><button type="button" class="btn quiet" data-cancel>Cancel</button><button class="btn primary">Create</button></div>
     </form>`, {
     onMount: (m, close) => {
-      let size = SIZES[0];
-      const note = () => { $('#sizeNote', m).textContent = `${size.width} × ${size.height} pixels`; };
-      note();
-      $('#sizeSeg', m).onclick = (e) => {
+      let type = 'world', size = SIZES[0];
+      const squares = { across: 30, down: 20, px: 140 };
+      const battleSize = () => ({ width: squares.across * squares.px, height: squares.down * squares.px });
+      const drawSize = () => {
+        $('#typeNote', m).textContent = MAP_TYPES[type].note;
+        const box = $('#sizeBox', m);
+        if (type === 'battlemap') {
+          const { width, height } = battleSize();
+          const tooBig = Math.max(width, height) > MAX_SIDE;
+          box.innerHTML = `<div class="field-label">Size in squares</div>
+            <div class="row3">
+              <label>Across<input type="number" name="across" min="2" max="200" value="${squares.across}"></label>
+              <label>Down<input type="number" name="down" min="2" max="200" value="${squares.down}"></label>
+              <label>Pixels a square<select name="px">${SQUARE_PX.map((v) => `<option ${v === squares.px ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
+            </div>
+            <p class="small ${tooBig ? 'warn' : 'muted'}">${width} × ${height} pixels${tooBig ? ` — over ${MAX_SIDE} on a side: fewer squares or smaller ones` : ''}</p>`;
+          box.oninput = box.onchange = (e) => {
+            const t = e.target;
+            if (!t.name) return;
+            squares[t.name] = Math.max(2, Math.min(200, +t.value || squares[t.name]));
+            const { width: w, height: h } = battleSize();
+            const p = $('p', box);
+            p.className = `small ${Math.max(w, h) > MAX_SIDE ? 'warn' : 'muted'}`;
+            p.textContent = `${w} × ${h} pixels${Math.max(w, h) > MAX_SIDE ? ` — over ${MAX_SIDE} on a side: fewer squares or smaller ones` : ''}`;
+          };
+        } else {
+          box.innerHTML = `<div class="field-label">Size</div>
+            <div class="seg" id="sizeSeg">${SIZES.map((s, i) => `<button type="button" data-i="${i}" class="${s === size ? 'on' : ''}">${s.label}</button>`).join('')}</div>
+            <p class="muted small" id="sizeNote">${size.width} × ${size.height} pixels</p>`;
+          box.oninput = box.onchange = null;
+          $('#sizeSeg', box).onclick = (e) => {
+            const b = e.target.closest('button');
+            if (!b) return;
+            size = SIZES[b.dataset.i];
+            for (const x of $('#sizeSeg', box).children) x.classList.toggle('on', x === b);
+            $('#sizeNote', box).textContent = `${size.width} × ${size.height} pixels`;
+          };
+        }
+      };
+      drawSize();
+      $('#typeSeg', m).onclick = (e) => {
         const b = e.target.closest('button');
         if (!b) return;
-        size = SIZES[b.dataset.i];
-        for (const x of $('#sizeSeg', m).children) x.classList.toggle('on', x === b);
-        note();
+        type = b.dataset.t;
+        for (const x of $('#typeSeg', m).children) x.classList.toggle('on', x === b);
+        drawSize();
       };
       $('[data-cancel]', m).onclick = () => close(null);
       $('form', m).onsubmit = async (e) => {
         e.preventDefault();
         const name = e.target.name.value.trim();
         if (!name) return;
-        const p = await store.createProject({ name, width: size.width, height: size.height });
+        const dims = type === 'battlemap' ? battleSize() : size;
+        if (Math.max(dims.width, dims.height) > MAX_SIDE) return toast(`Keep each side at ${MAX_SIDE} pixels or less`);
+        const style = { ...MAP_TYPES[type].style, ...(type === 'battlemap' ? { gridSize: squares.px } : {}) };
+        const p = await store.createProject({ name, ...dims, type, style });
         close(p);
         location.hash = `#/p/${p.id}`;
       };

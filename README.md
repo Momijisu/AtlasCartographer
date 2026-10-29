@@ -8,7 +8,7 @@ Plain HTML, CSS and JavaScript. No server, no build step.
 
 Early. What works today:
 
-- Projects: create, rename and delete maps at a few preset sizes
+- Projects: create, rename and delete maps. Every map uses the same editor; its type sets the start: World and Region maps begin as sea, City maps and Battlemaps as land (the water brush carves rivers and lakes), and Battlemaps are sized in squares with a matching grid. Art packs can be tagged with the kind of map they're for, and the picker shows that art first
 - Editor: pan and zoom (mouse, wheel, touch, pinch), an ink pen in five colours, an eraser, undo and redo
 - Land and water: paint land, carve water (or hold Alt to switch), and the coastline, its outline and ripple rings in the sea draw themselves. Fill the land with any texture from the library. On PC the land is drawn at the map's full resolution; phones and tablets use a lighter version (Settings → Land detail)
 - Terrain: paint any library texture onto the land (grass, forest floor, sand…) with soft edges and adjustable strength; it stops at the coast. Paint "Base land" to take it back off
@@ -25,7 +25,7 @@ Early. What works today:
 
 Planned:
 
-- City and battlemap modes (walls, floors, grid snapping)
+- Grid snapping, a wall-and-door tool, exports sized for virtual tabletops
 
 ## Editor shortcuts
 

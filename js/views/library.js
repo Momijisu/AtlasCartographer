@@ -34,7 +34,7 @@ export async function viewLibrary(view) {
         <a class="pack-main" href="#/library/${encodeURIComponent(p.name)}">
           <span class="pack-icon">${icon('stack')}</span>
           <span><b>${esc(p.name)}</b>
-            <span class="sub">${num(p.count)} images · ${p.categories.length} ${p.categories.length === 1 ? 'category' : 'categories'} · ${fmtBytes(p.bytes)}</span>
+            <span class="sub">${p.type !== 'any' ? `${esc(A.PACK_TYPES.find(([v]) => v === p.type)?.[1] || '')} · ` : ''}${num(p.count)} images · ${p.categories.length} ${p.categories.length === 1 ? 'category' : 'categories'} · ${fmtBytes(p.bytes)}</span>
             <span class="sub">${onDevice.get(p.name) === p.count ? 'All on this device' : `${num(onDevice.get(p.name))} of ${num(p.count)} full-size on this device`}</span></span>
         </a>
         <label class="check" title="Download every image in this pack, for working offline"><input type="checkbox" data-pin="${esc(p.name)}" ${meta.pinned.includes(p.name) ? 'checked' : ''}> Keep offline</label>
@@ -151,6 +151,7 @@ export async function viewPack(view, name) {
   view.innerHTML = `
     <div class="page-head"><div><div class="eyebrow"><a href="#/library">Art library</a></div><h1>${esc(name)}</h1>
       <div class="muted small">${num(p.count)} images · ${fmtBytes(p.bytes)}</div></div>
+      <label class="inline pack-type">Made for <select id="packType">${A.PACK_TYPES.map(([v, n]) => `<option value="${v}" ${p.type === v ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
       <div class="actions">
         <label class="check"><input type="checkbox" id="pinPack" ${meta.pinned.includes(name) ? 'checked' : ''}> Keep offline</label>
         <button class="btn danger" id="delPack">${icon('trash')} Delete pack</button>
@@ -195,6 +196,10 @@ export async function viewPack(view, name) {
   $('#pinPack').onchange = async (e) => {
     await A.setPinned(name, e.target.checked);
     if (e.target.checked) assetsync.kick();
+  };
+  $('#packType').onchange = async (e) => {
+    await A.setPackType(name, e.target.value);
+    toast(e.target.value === 'any' ? 'Shown first for every kind of map' : `Shown first on ${A.PACK_TYPES.find(([v]) => v === e.target.value)[1].toLowerCase()}`);
   };
   $('#delPack').onclick = async () => {
     if (!(await confirmDialog(`Delete “${name}” and its ${num(p.count)} images from all your devices and OneDrive? Maps that use them will show gaps.`, 'Delete pack'))) return;

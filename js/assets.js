@@ -32,11 +32,16 @@ export const isImagePath = (path) => extOf(path) in TYPE_OF && !/(^|\/)(__MACOSX
 const guessKind = (category) => (/textur|tile|pattern|fill|ground/i.test(category) ? 'texture' : 'stamp');
 
 // Packs on this device: [{ name, count, bytes, categories: [{ name, count, kind }] }]
+// What kind of map a pack is made for (its records' mapType), so the picker
+// can show a map's own kind of art first. Packs start as 'any'.
+export const PACK_TYPES = [['any', 'Any map'], ['world', 'World maps'], ['region', 'Region maps'], ['city', 'City maps'], ['battlemap', 'Battlemaps']];
+
 export function packs() {
   const by = new Map();
   for (const a of liveAssets()) {
     let p = by.get(a.pack);
-    if (!p) by.set(a.pack, p = { name: a.pack, count: 0, bytes: 0, cats: new Map() });
+    if (!p) by.set(a.pack, p = { name: a.pack, count: 0, bytes: 0, cats: new Map(), type: 'any' });
+    if (a.mapType && p.type === 'any') p.type = a.mapType;
     p.count++; p.bytes += a.size || 0;
     const c = p.cats.get(a.category) || { name: a.category, count: 0, kind: a.kind };
     c.count++;
@@ -63,6 +68,10 @@ export async function deletePack(name) {
   await saveRecords(gone.map((a) => ({ id: a.id, type: a.type, deleted: true })));
   await dropLocal(gone.map((a) => a.id));
   await saveMeta({ pinned: meta.pinned.filter((p) => p !== name) });
+}
+
+export async function setPackType(pack, type) {
+  await saveRecords(liveAssets().filter((a) => a.pack === pack && (a.mapType || 'any') !== type).map((a) => ({ ...a, mapType: type })));
 }
 
 export async function setCategoryKind(pack, category, kind) {
@@ -182,6 +191,8 @@ export async function importEntries(entries, pack, onProgress = () => {}) {
   const progress = { done: 0, total: list.length, added: 0, skipped: 0 };
   let batch = [];
   const seen = new Set();
+  // Images added to an existing pack take on what it's made for.
+  const mapType = packs().find((p) => p.name === pack)?.type;
   for (const e of list) {
     try {
       const raw = await e.blob();
@@ -197,7 +208,7 @@ export async function importEntries(entries, pack, onProgress = () => {}) {
       const parts = e.path.split('/');
       const file = parts.pop();
       const category = parts.join('/');
-      batch.push({ id, name: file.replace(/\.[^.]+$/, ''), pack, category, kind: guessKind(category), type, size: blob.size, w, h });
+      batch.push({ id, name: file.replace(/\.[^.]+$/, ''), pack, category, kind: guessKind(category), type, size: blob.size, w, h, ...(mapType && mapType !== 'any' ? { mapType } : {}) });
       progress.added++;
       // Save as we go, so an interrupted import keeps what it finished.
       if (batch.length >= 100) { await saveRecords(batch); batch = []; }

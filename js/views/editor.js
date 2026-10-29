@@ -770,6 +770,7 @@ class Editor {
     const st = mapStyle(this.doc);
     el.innerHTML = `<header><b>Map style</b><button class="icon-btn" data-close aria-label="Close">${icon('x')}</button></header>
       <div class="style-body">
+        <label class="inline">A blank map is <select name="surface">${[['sea', 'Sea'], ['ground', 'Land'], ...(st.surface ? [] : [['', 'Paper']])].map(([v, n]) => `<option value="${v}" ${(st.surface || '') === v ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
         <label class="inline">Sea <input type="color" name="sea" value="${st.sea}"></label>
         <label class="inline">Land <input type="color" name="land" value="${st.land}"></label>
         <label class="inline">Coastline <input type="color" name="coast" value="${st.coast}"></label>
@@ -861,7 +862,11 @@ class Editor {
       $('[data-close]', el).onclick = () => { el.hidden = true; };
       return;
     }
-    const kp = `ac.pickPack.${tex ? 'texture' : 'stamp'}`, kc = `ac.pickCat.${tex ? 'texture' : 'stamp'}`;
+    // This kind of map's own packs first, then packs for any map, then the rest.
+    const mt = this.project.type || 'any';
+    const rank = (p) => (p.type === mt && mt !== 'any' ? 0 : p.type === 'any' ? 1 : 2);
+    packs.sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
+    const kp = `ac.pickPack.${tex ? 'texture' : 'stamp'}.${mt}`, kc = `ac.pickCat.${tex ? 'texture' : 'stamp'}.${mt}`;
     const pack = packs.find((p) => p.name === load(kp, '')) || packs[0];
     const cat = pack.categories.find((c) => c.name === load(kc, '')) || pack.categories[0];
     const list = A.liveAssets().filter((a) => a.pack === pack.name && a.category === cat.name)
@@ -871,7 +876,7 @@ class Editor {
         ${tex ? '' : `<label class="check small"><input type="checkbox" class="pk-multi" ${this.multi ? 'checked' : ''}> Pick several</label>`}
         <button class="icon-btn" data-close aria-label="Close">${icon('x')}</button></header>
       <div class="pk-filters">
-        <select class="pk-pack" aria-label="Pack">${packs.map((p) => `<option ${p === pack ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select>
+        <select class="pk-pack" aria-label="Pack">${packs.map((p) => `<option value="${esc(p.name)}" ${p === pack ? 'selected' : ''}>${esc(p.name)}${rank(p) === 2 ? ` (${esc(A.PACK_TYPES.find(([v]) => v === p.type)?.[1] || '')})` : ''}</option>`).join('')}</select>
         <select class="pk-cat" aria-label="Category">${pack.categories.map((c) => `<option value="${esc(c.name)}" ${c === cat ? 'selected' : ''}>${esc(c.name || 'General')} (${c.count})</option>`).join('')}</select>
       </div>
       <div class="pk-actions">${tex ? `<button class="btn small${mode === 'terrain' && !this.terrainTex ? ' on' : ''}" data-plain>${plainLabel}</button>`

@@ -61,9 +61,10 @@ export async function saveProject(p) {
   return p;
 }
 
-export async function createProject({ name, width, height }) {
-  const p = await saveProject({ id: uid(), name, width, height });
-  const doc = { id: p.id, objects: {} };
+// style: the map's starting look (see MAP_TYPES in views/home.js).
+export async function createProject({ name, width, height, type, style }) {
+  const p = await saveProject({ id: uid(), name, width, height, ...(type ? { type } : {}) });
+  const doc = { id: p.id, objects: style ? { style: { id: 'style', kind: 'style', ...style, updatedAt: Date.now() } } : {} };
   docs.set(p.id, doc);
   await db.put('docs', doc);
   await bumpDoc(p.id);

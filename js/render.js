@@ -118,7 +118,8 @@ export function drawDoc(ctx, project, doc, { image = () => null, placeholder = f
   const objs = liveObjects(doc).sort((a, b) => (a.z || 0) - (b.z || 0));
   const land = objs.filter((o) => o.kind === 'land');
   const terrain = objs.filter((o) => o.kind === 'terrain');
-  if ((land.length || terrain.length) && !hidden.has('land')) {
+  const surface = docStyle(doc).surface;
+  if ((land.length || terrain.length || surface) && !hidden.has('land')) {
     ctx.drawImage(landLayer(project, doc, land, terrain, landScale, image, cache), 0, 0, project.width, project.height);
   }
   const st = mapStyle(doc);
@@ -286,7 +287,11 @@ export function layerResolver(doc) {
 export const docStyle = (doc) => doc?.objects?.style && !doc.objects.style.deleted ? doc.objects.style : {};
 
 // The map's look: STYLE, with whatever the map's style object overrides.
-const STYLE_KEYS = ['sea', 'coast', 'land', 'coastWidth', 'rippleCount', 'coastStyle', 'stampShadow',
+// surface: what an untouched map is. 'sea' (world and region maps: paint
+// land onto it), 'ground' (cities and battlemaps: all land; the water brush
+// carves lakes and rivers out of it), or unset (maps made before map types:
+// plain paper until land is painted, then sea around it).
+const STYLE_KEYS = ['surface', 'sea', 'coast', 'land', 'coastWidth', 'rippleCount', 'coastStyle', 'stampShadow',
   'grid', 'gridSize', 'gridOpacity', 'vignette', 'frame', 'overlay', 'overlayOpacity', 'scaleBar', 'scaleText', 'scaleLength'];
 const FINISH = {
   coastStyle: 'ripples', grid: 'none', gridSize: 128, gridOpacity: 0.25, vignette: 0, frame: 'none', overlay: null, overlayOpacity: 0.35,
@@ -304,6 +309,11 @@ export function mapStyle(doc) {
 function landLayer(project, doc, land, terrain, scale, image, cache) {
   const style = docStyle(doc);
   const st = mapStyle(doc);
+  // A map from before map types is plain paper. Its first land-or-water
+  // stroke decides what the paper was: painting land first makes it sea
+  // around the land; painting water first makes the paper land, and the water
+  // carves out of it (rather than turning the whole map to sea).
+  if (!st.surface && land.length && land[0].mode === 'erase') st.surface = 'ground';
   const texIds = [...new Set([style.landTexture, ...terrain.map((t) => t.texture)].filter(Boolean))];
   const pics = new Map(texIds.map((id) => [id, image(id)]));
   if (!cache) return renderLand(project, land, terrain, scale, pics, style.landTexture, st);
@@ -399,6 +409,7 @@ function renderLand(project, land, terrain, scale, pics, landTexture, st, into =
   // The land grown by d, as a black mask.
   const landMask = (d) => {
     reset();
+    if (st.surface === 'ground') m.fillRect(-d - 1, -d - 1, project.width + 2 * d + 2, project.height + 2 * d + 2);
     for (const s of land) {
       if (!near(s, d)) continue;
       m.globalCompositeOperation = s.mode === 'erase' ? 'destination-out' : 'source-over';
@@ -414,7 +425,8 @@ function renderLand(project, land, terrain, scale, pics, landTexture, st, into =
     target.drawImage(mask, 0, 0);
   };
   const base = landTexture && pics.get(landTexture) ? texturePattern(m, pics.get(landTexture), st) : st.land;
-  if (land.length) {
+  const hasLand = land.length || st.surface;
+  if (hasLand) {
     o.fillStyle = st.sea;
     o.fillRect(0, 0, w, h);
     for (const r of [...st.ripples].sort((a, b) => b - a)) {
@@ -449,7 +461,7 @@ function renderLand(project, land, terrain, scale, pics, landTexture, st, into =
       for (const s of reach) softStroke(m, s, scale);
       paint(fill, tc);
     }
-    if (land.length) { landMask(0); tc.globalCompositeOperation = 'destination-in'; tc.drawImage(mask, 0, 0); }
+    if (hasLand) { landMask(0); tc.globalCompositeOperation = 'destination-in'; tc.drawImage(mask, 0, 0); }
     o.drawImage(t, 0, 0);
   }
   if (!into) return out;
