@@ -12,6 +12,8 @@ import { viewHome } from './views/home.js';
 import { viewEditor } from './views/editor.js';
 import { viewLibrary, viewPack } from './views/library.js';
 import { loadAssets } from './assets.js';
+import * as assetsync from './assetsync.js';
+import * as images from './images.js';
 import { viewSettings, renderOneDriveCard, applyTheme } from './views/settings.js';
 import { state } from './ui.js';
 
@@ -28,6 +30,8 @@ async function boot() {
     else route();
   });
   sync.onStatus(renderSyncBadge);
+  // Art that just arrived may be what a stamp was waiting for.
+  assetsync.onProgress((p, fresh) => { if (fresh) images.retryMissing(); });
   sync.start();
   // Keep the OneDrive sign-in alive in the background (see auth.renewSilently).
   const renew = async () => { if (auth.needsRenewal() && await auth.renewSilently()) sync.sync(); };

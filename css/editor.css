@@ -38,3 +38,38 @@ body.editing { overflow: hidden; overscroll-behavior: none; }
   .toolbar .width { width: 72px; }
   .swatches { gap: .2rem; }
 }
+
+.tb-group { display: contents; }
+.tb-group[hidden] { display: none; }
+.tool:disabled { opacity: .35; cursor: default; background: transparent; }
+.toolbar .stamp-size { width: 96px; min-height: 0; padding: 0; flex-shrink: 0; accent-color: var(--rubric); background: transparent; border: 0; }
+.brush-chip {
+  position: relative; width: 40px; height: 40px; flex-shrink: 0; padding: 3px; cursor: pointer;
+  display: grid; place-items: center; color: var(--text-2); font-size: 1.15rem;
+  border: 1px dashed var(--rule-strong); border-radius: 6px;
+  background: repeating-conic-gradient(var(--ink-3) 0 25%, var(--ink-2) 0 50%) 0 0 / 10px 10px;
+}
+.brush-chip img { width: 100%; height: 100%; object-fit: contain; }
+.chip-count { position: absolute; right: -6px; top: -6px; min-width: 18px; padding: 0 4px; border-radius: 9px; background: var(--rubric); color: var(--rubric-ink); font: 700 .7rem/18px var(--sans); text-align: center; }
+
+/* The art picker: a panel on the right, a sheet from the bottom on phones. */
+.picker {
+  position: absolute; top: .6rem; right: .6rem; bottom: calc(5.2rem + env(safe-area-inset-bottom)); width: 300px;
+  display: flex; flex-direction: column; overflow: hidden;
+  background: var(--ink-2); border: 1px solid var(--rule-strong); border-radius: 8px; box-shadow: var(--shadow);
+}
+.picker[hidden] { display: none; }
+.picker header { display: flex; align-items: center; gap: .6rem; padding: .5rem .5rem .3rem .9rem; }
+.picker header b { font: 600 1.3rem/1 var(--display); flex: 1; }
+.picker header label { margin: 0; font-size: .82rem; }
+.pk-filters { display: grid; gap: .4rem; padding: 0 .7rem; }
+.pk-filters select { min-height: 34px; padding: .3em .5em; font-size: .9rem; }
+.pk-actions { display: flex; align-items: center; justify-content: space-between; gap: .5rem; padding: .5rem .7rem; }
+.pk-grid { flex: 1; overflow-y: auto; display: grid; grid-template-columns: repeat(3, 1fr); gap: .35rem; padding: 0 .7rem .7rem; align-content: start; }
+.pk-grid .tile { cursor: pointer; padding: 0; color: var(--muted); }
+.pk-grid .tile.on { border-color: var(--rubric); box-shadow: 0 0 0 2px var(--rubric); }
+@media (max-width: 600px) {
+  .picker { left: .5rem; right: .5rem; width: auto; top: auto; height: 52vh; bottom: calc(7.6rem + env(safe-area-inset-bottom)); }
+  .pk-grid { grid-template-columns: repeat(4, 1fr); }
+  .toolbar .stamp-size { width: 72px; }
+}

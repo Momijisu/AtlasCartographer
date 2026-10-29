@@ -10,6 +10,7 @@ Early. What works today:
 
 - Projects: create, rename and delete maps at a few preset sizes
 - Editor: pan and zoom (mouse, wheel, touch, pinch), an ink pen in five colours, an eraser, undo and redo
+- Stamps from the art library: place one, or paint many with the scatter brush (randomly chosen from the pictures you pick, nudged, resized and mirrored a little, overlapping front to back). Select a stamp to move, scale (corners), rotate (top handle; Shift snaps to 15°), flip, bring forward, send back or delete
 - OneDrive sync of every project, merged stroke by stroke, so edits from two devices both survive
 - Art library: import a folder or zip of images (PNG, WebP, JPEG, GIF, SVG, AVIF). The top folder is the pack; folders inside it are categories, each marked as stamps or textures. Duplicates are skipped.
 - Art syncs through OneDrive: the device that imported a pack uploads it in the background; other devices get thumbnails straight away and full-size art when it's used, or the whole pack with **Keep offline**
@@ -18,8 +19,19 @@ Early. What works today:
 Planned, in order:
 
 1. Land and water painting with automatic coastlines, terrain textures
-2. Stamps from the library, with a scatter brush, curved text labels, layers
+2. Curved text labels, layers
 3. Export to PNG/WebP for WorldAtlas Maps
+
+## Editor shortcuts
+
+| Key | | Key | |
+|---|---|---|---|
+| H / Space | move the view | V | select |
+| B | ink pen | E | eraser |
+| S | stamp | R | scatter |
+| [ ] | smaller / larger (or send back / bring forward) | F | flip |
+| Del | delete | 0 | fit the map |
+| Ctrl+Z | undo | Ctrl+Shift+Z | redo |
 
 ## Art assets
 
@@ -73,6 +85,7 @@ css/editor.css        the editor
 js/app.js             boot, routing, top bar
 js/views/*.js         one module per screen
 js/render.js          draws a map document (editor and thumbnails)
+js/images.js          decoded art for drawing, loading full size on demand
 js/store.js           projects and drawings, merge rules
 js/assets.js          art catalogue, importing, pictures on this device
 js/assetsync.js       moving art to and from OneDrive

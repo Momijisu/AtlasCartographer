@@ -4,6 +4,7 @@ import { $, $$, esc, modal, confirmDialog, toast, timeAgo } from '../util.js';
 import { icon } from '../icons.js';
 import { setTitle, state } from '../ui.js';
 import { drawThumb } from '../render.js';
+import * as images from '../images.js';
 
 export const SIZES = [
   { label: 'Landscape', width: 4096, height: 3072 },
@@ -31,9 +32,12 @@ export function viewHome(view) {
     b.onclick = (e) => { e.preventDefault(); e.stopPropagation(); projectMenu(b.dataset.menu); };
   }
   // Thumbnails draw after the page shows; a drawing that hasn't synced yet stays blank.
-  for (const c of $$('[data-thumb]', view)) {
-    store.getDoc(c.dataset.thumb).then((doc) => { const p = store.project(c.dataset.thumb); if (p && c.isConnected) drawThumb(c, p, doc); });
-  }
+  const opts = { image: (id) => images.get(id, { thumbOnly: true }) };
+  const paint = (c) => store.getDoc(c.dataset.thumb).then((doc) => { const p = store.project(c.dataset.thumb); if (p && c.isConnected) drawThumb(c, p, doc, opts); });
+  for (const c of $$('[data-thumb]', view)) paint(c);
+  // Stamps' pictures load after the first paint: redraw as they arrive.
+  let t;
+  state.cleanup = images.onLoad(() => { clearTimeout(t); t = setTimeout(() => $$('[data-thumb]', view).forEach(paint), 150); });
 }
 
 function newProjectDialog() {

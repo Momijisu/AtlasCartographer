@@ -27,20 +27,43 @@ export function drawStroke(ctx, o) {
   ctx.stroke();
 }
 
-export function drawDoc(ctx, project, doc) {
+// Stamps: library art centred on (x, y), w × h map pixels, rotated by rot
+// radians, mirrored when flip. Art that hasn't loaded yet shows as an outline
+// when placeholder is set (the editor), and not at all otherwise.
+export function drawStamp(ctx, o, img, placeholder = false) {
+  if (!img && !placeholder) return;
+  ctx.save();
+  ctx.translate(o.x, o.y);
+  if (o.rot) ctx.rotate(o.rot);
+  if (o.flip) ctx.scale(-1, 1);
+  if (img) ctx.drawImage(img, -o.w / 2, -o.h / 2, o.w, o.h);
+  else {
+    ctx.strokeStyle = 'rgba(80, 60, 40, .45)';
+    ctx.lineWidth = Math.max(1, o.w / 60);
+    ctx.setLineDash([o.w / 12, o.w / 12]);
+    ctx.strokeRect(-o.w / 2, -o.h / 2, o.w, o.h);
+  }
+  ctx.restore();
+}
+
+// image(assetId) → a loaded picture or null (see images.js).
+export function drawDoc(ctx, project, doc, { image = () => null, placeholder = false } = {}) {
   ctx.fillStyle = PAPER;
   ctx.fillRect(0, 0, project.width, project.height);
   if (!doc) return;
   const objs = liveObjects(doc).sort((a, b) => (a.z || 0) - (b.z || 0));
-  for (const o of objs) if (o.kind === 'stroke') drawStroke(ctx, o);
+  for (const o of objs) {
+    if (o.kind === 'stroke') drawStroke(ctx, o);
+    else if (o.kind === 'stamp') drawStamp(ctx, o, image(o.asset), placeholder);
+  }
 }
 
 // Render the whole map into a canvas no bigger than maxW × maxH.
-export function drawThumb(canvas, project, doc, maxW = 480, maxH = 360) {
+export function drawThumb(canvas, project, doc, opts, maxW = 480, maxH = 360) {
   const s = Math.min(maxW / project.width, maxH / project.height);
   canvas.width = Math.max(1, Math.round(project.width * s));
   canvas.height = Math.max(1, Math.round(project.height * s));
   const ctx = canvas.getContext('2d');
   ctx.setTransform(s, 0, 0, s, 0, 0);
-  drawDoc(ctx, project, doc);
+  drawDoc(ctx, project, doc, opts);
 }
