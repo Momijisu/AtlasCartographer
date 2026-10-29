@@ -63,6 +63,7 @@ export async function viewEditor(view, id) {
           <button class="brush-chip terrain-chip" data-act="terrain-picker" title="Texture to paint" aria-label="Texture to paint"></button>
           <input type="range" class="terrain-size" min="0" max="100" step="1" title="Brush size ([ and ])" aria-label="Terrain brush size">
           <input type="range" class="terrain-soft" min="0" max="100" step="1" title="Soft edges" aria-label="Soft edges">
+          <input type="range" class="terrain-opacity" min="10" max="100" step="5" title="Strength: lower lets the land show through" aria-label="Strength">
         </span>
         <span class="tb-group" data-for="path">
           <span class="seg path-style">${Object.entries(PATHS).map(([k, [name]]) => `<button type="button" data-pathstyle="${k}">${name}</button>`).join('')}</span>
@@ -77,6 +78,7 @@ export async function viewEditor(view, id) {
         <span class="tb-group" data-for="select">
           <button class="tool" data-act="duplicate" title="Duplicate (Ctrl+D)" aria-label="Duplicate">${icon('plus-circle')}</button>
           <button class="tool" data-act="edit-text" title="Edit the text (Enter)" aria-label="Edit the text">${icon('pencil-simple')}</button>
+          <button class="tool" data-act="adjust" title="Opacity, tint and brightness" aria-label="Adjust">${icon('magic-wand')}</button>
           <button class="tool" data-act="flip" title="Flip (F)" aria-label="Flip">${icon('arrows-clockwise')}</button>
           <button class="tool" data-act="front" title="Bring to front (])" aria-label="Bring to front">${icon('arrow-up')}</button>
           <button class="tool" data-act="back" title="Send to back ([)" aria-label="Send to back">${icon('arrow-down')}</button>
@@ -91,6 +93,7 @@ export async function viewEditor(view, id) {
       </div>
       <div class="layers-panel side-panel" hidden></div>
       <div class="style-panel side-panel" hidden></div>
+      <div class="adjust-panel side-panel" hidden></div>
     </div>`;
   const ed = new Editor(view.querySelector('.editor'), project, doc);
   state.cleanup = () => ed.destroy();
@@ -132,6 +135,7 @@ class Editor {
     this.terrainTex = load('ac.terrainTex', null); // null paints the base land back
     this.terrainSize = load('ac.terrainSize', 384);
     this.terrainSoft = load('ac.terrainSoft', 0.6);
+    this.terrainOpacity = load('ac.terrainOpacity', 1);
     this.pickerMode = 'stamp'; // or 'texture': what the picker is choosing
     this.locked = new Set(load(`ac.locked.${project.id}`, [])); // layers this device won't edit
     this.brush = load('ac.brush', []).filter((id) => A.asset(id)); // asset ids to stamp with
@@ -480,11 +484,15 @@ class Editor {
     $('.path-width', this.root).value = this.pathWidth;
     for (const b of $$('[data-pathstyle]', this.root)) b.classList.toggle('on', b.dataset.pathstyle === this.pathStyle);
     $('.terrain-soft', this.root).value = Math.round(this.terrainSoft * 100);
+    $('.terrain-opacity', this.root).value = Math.round(this.terrainOpacity * 100);
     for (const b of $$('[data-landmode]', this.root)) b.classList.toggle('on', b.dataset.landmode === this.landMode);
     const all = this.selectedObjs(), sel = all.length === 1 ? all[0] : null;
     for (const b of $$('[data-for="select"] button', this.root)) b.disabled = !all.length;
     $('[data-act="edit-text"]', this.root).hidden = sel?.kind !== 'label';
     $('[data-act="flip"]', this.root).hidden = !all.some((o) => o.kind === 'stamp');
+    $('[data-act="adjust"]', this.root).hidden = !all.some((o) => o.kind === 'stamp');
+    if (!all.some((o) => o.kind === 'stamp')) $('.adjust-panel', this.root).hidden = true;
+    else this.renderAdjust();
     this.canvas.style.cursor = panning ? (this.gesture?.kind === 'pan' ? 'grabbing' : 'grab') : this.tool === 'select' ? 'default' : 'crosshair';
     this.renderChip();
   }
@@ -571,6 +579,35 @@ class Editor {
     return true;
   }
 
+  // Opacity, tint and brightness of the selected stamps (shown as the first's).
+  renderAdjust() {
+    const el = $('.adjust-panel', this.root);
+    if (!el || el.hidden) return;
+    const stamps = this.selectedObjs().filter((o) => o.kind === 'stamp');
+    if (!stamps.length) return;
+    const o = stamps[0];
+    // Don't redraw under a slider that's being dragged.
+    if (el.contains(document.activeElement) && document.activeElement.type === 'range') return;
+    el.innerHTML = `<header><b>${stamps.length > 1 ? `${stamps.length} stamps` : 'Stamp'}</b><button class="icon-btn" data-close aria-label="Close">${icon('x')}</button></header>
+      <div class="style-body">
+        <label>Opacity<input type="range" name="opacity" min="0.1" max="1" step="0.05" value="${o.opacity ?? 1}"></label>
+        <label class="inline">Tint <input type="color" name="tint" value="${o.tint || '#7a9a5a'}"></label>
+        <label>Tint strength<input type="range" name="tintAmt" min="0" max="1" step="0.05" value="${o.tintAmt || 0}"></label>
+        <label>Brightness<input type="range" name="bright" min="-1" max="1" step="0.05" value="${o.bright || 0}"></label>
+        <button class="btn small quiet" data-reset>Reset</button>
+      </div>`;
+    $('[data-close]', el).onclick = () => { el.hidden = true; };
+    const apply = (patch) => this.editSelected((x) => (x.kind === 'stamp' ? patch : {}));
+    el.onchange = (e) => {
+      const t = e.target;
+      if (!t.name) return;
+      const v = t.type === 'range' ? +t.value : t.value;
+      // Choosing a tint colour with no strength yet gives it some, so it shows.
+      apply(t.name === 'tint' && !(o.tintAmt > 0) ? { tint: v, tintAmt: 0.5 } : { [t.name]: v });
+    };
+    $('[data-reset]', el).onclick = () => apply({ opacity: 1, tintAmt: 0, bright: 0 });
+  }
+
   // Map style: colours and coast, saved with the map (and undoable).
   renderStylePanel() {
     const el = $('.style-panel', this.root);
@@ -582,7 +619,8 @@ class Editor {
         <label class="inline">Land <input type="color" name="land" value="${st.land}"></label>
         <label class="inline">Coastline <input type="color" name="coast" value="${st.coast}"></label>
         <label>Coastline width<input type="range" name="coastWidth" min="0" max="24" step="1" value="${st.coastWidth}"></label>
-        <label>Ripples in the sea<input type="range" name="rippleCount" min="0" max="6" step="1" value="${st.rippleCount}"></label>
+        <label class="inline">Shore <select name="coastStyle">${[['ripples', 'Ripples'], ['hatch', 'Hatching'], ['plain', 'Plain']].map(([v, n]) => `<option value="${v}" ${st.coastStyle === v ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
+        ${st.coastStyle === 'ripples' ? `<label>Ripples in the sea<input type="range" name="rippleCount" min="1" max="6" step="1" value="${st.rippleCount}"></label>` : ''}
         <label class="check"><input type="checkbox" name="stampShadow" ${st.stampShadow ? 'checked' : ''}> Shadows under stamps</label>
         <div class="field-label">Finishing</div>
         <label class="inline">Grid <select name="grid">${[['none', 'None'], ['square', 'Squares'], ['hex', 'Hexes']].map(([v, n]) => `<option value="${v}" ${st.grid === v ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
@@ -591,6 +629,9 @@ class Editor {
         <label>Darker edges<input type="range" name="vignette" min="0" max="1" step="0.05" value="${st.vignette}"></label>
         <label class="inline">Frame <select name="frame">${[['none', 'None'], ['line', 'Line'], ['double', 'Double line']].map(([v, n]) => `<option value="${v}" ${st.frame === v ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
         <div class="inline-row"><span>Paper</span><button type="button" class="btn small" data-paper>${st.overlay ? 'Change…' : 'Choose…'}</button></div>
+        <label class="inline">Scale bar <select name="scaleBar">${[['none', 'None'], ['left', 'Bottom left'], ['right', 'Bottom right']].map(([v, n]) => `<option value="${v}" ${st.scaleBar === v ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
+        ${st.scaleBar !== 'none' ? `<label>Distance it shows<input name="scaleText" maxlength="30" value="${esc(st.scaleText)}"></label>
+        <label>Bar length<input type="range" name="scaleLength" min="0.05" max="0.5" step="0.01" value="${st.scaleLength}"></label>` : ''}
         ${st.overlay ? `<label>Paper strength<input type="range" name="overlayOpacity" min="0.05" max="1" step="0.05" value="${st.overlayOpacity}"></label>` : ''}
         <button class="btn small quiet" data-reset>Reset to the defaults</button>
       </div>`;
@@ -600,12 +641,13 @@ class Editor {
       const t = e.target;
       if (!t.name) return;
       const v = t.type === 'checkbox' ? t.checked : t.type === 'range' ? +t.value : t.value;
-      this.setStyle({ [t.name]: v }).then(() => { if (t.name === 'grid') this.renderStylePanel(); });
+      this.setStyle({ [t.name]: v }).then(() => { if (['grid', 'coastStyle', 'scaleBar'].includes(t.name)) this.renderStylePanel(); });
     };
     $('[data-paper]', el).onclick = () => this.openPicker('overlay');
     $('[data-reset]', el).onclick = () => this.setStyle({
       sea: null, land: null, coast: null, coastWidth: null, rippleCount: null, stampShadow: null,
       grid: null, gridSize: null, gridOpacity: null, vignette: null, frame: null, overlay: null, overlayOpacity: null,
+      coastStyle: null, scaleBar: null, scaleText: null, scaleLength: null,
     }).then(() => this.renderStylePanel());
   }
 
@@ -764,6 +806,7 @@ class Editor {
       else if (act === 'edit-text') this.editLabel(this.selectedObj());
       else if (act === 'layers') this.togglePanel('.layers-panel', () => this.renderLayers());
       else if (act === 'style') this.togglePanel('.style-panel', () => this.renderStylePanel());
+      else if (act === 'adjust') this.togglePanel('.adjust-panel', () => this.renderAdjust());
       else if (act === 'terrain-picker') this.togglePicker('terrain');
     };
     $('.width', this.root).oninput = (e) => { this.width = +e.target.value; keep('ac.width', this.width); };
@@ -772,6 +815,7 @@ class Editor {
     $('.path-width', this.root).oninput = (e) => { this.pathWidth = +e.target.value; keep('ac.pathWidth', this.pathWidth); };
     $('.terrain-size', this.root).oninput = (e) => { this.terrainSize = sizeFromSlider(+e.target.value); keep('ac.terrainSize', this.terrainSize); };
     $('.terrain-soft', this.root).oninput = (e) => { this.terrainSoft = +e.target.value / 100; keep('ac.terrainSoft', this.terrainSoft); };
+    $('.terrain-opacity', this.root).oninput = (e) => { this.terrainOpacity = +e.target.value / 100; keep('ac.terrainOpacity', this.terrainOpacity); };
     this.syncToolbar();
 
     const c = this.canvas;
@@ -874,7 +918,7 @@ class Editor {
     } else if (this.tool === 'path') {
       this.gesture = { kind: 'path', stroke: { id: uid(), kind: 'path', style: this.pathStyle, width: this.pathWidth, points: [r1(mx), r1(my)] } };
     } else if (this.tool === 'terrain') {
-      this.gesture = { kind: 'terrain', stroke: { id: uid(), kind: 'terrain', texture: this.terrainTex, width: this.terrainSize, soft: this.terrainSoft, points: [r1(mx), r1(my)] } };
+      this.gesture = { kind: 'terrain', stroke: { id: uid(), kind: 'terrain', texture: this.terrainTex, width: this.terrainSize, soft: this.terrainSoft, opacity: this.terrainOpacity, points: [r1(mx), r1(my)] } };
     } else if (this.tool === 'text') {
       const hit = this.objectAt(mx, my, ['label']);
       if (hit) this.editLabel(hit);

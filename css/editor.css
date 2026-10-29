@@ -103,8 +103,8 @@ body.editing { overflow: hidden; overscroll-behavior: none; }
 .style-body label.inline { justify-content: space-between; }
 .style-body input[type="color"] { width: 48px; min-height: 30px; }
 .style-body input[type="range"] { min-height: 0; padding: 0; border: 0; background: transparent; accent-color: var(--rubric); }
-.toolbar .terrain-size, .toolbar .terrain-soft { width: 80px; min-height: 0; padding: 0; flex-shrink: 0; accent-color: var(--rubric); background: transparent; border: 0; }
-@media (max-width: 600px) { .toolbar .terrain-size, .toolbar .terrain-soft { width: 60px; } }
+.toolbar .terrain-size, .toolbar .terrain-soft, .toolbar .terrain-opacity { width: 80px; min-height: 0; padding: 0; flex-shrink: 0; accent-color: var(--rubric); background: transparent; border: 0; }
+@media (max-width: 600px) { .toolbar .terrain-size, .toolbar .terrain-soft, .toolbar .terrain-opacity { width: 60px; } }
 .path-style { flex-shrink: 0; }
 .path-style button { padding: .4em .6em; }
 .toolbar .path-width { width: 80px; min-height: 0; padding: 0; flex-shrink: 0; accent-color: var(--rubric); background: transparent; border: 0; }

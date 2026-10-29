@@ -48,7 +48,9 @@ export function strokePath(ctx, p, width) {
 // when placeholder is set (the editor), and not at all otherwise.
 export function drawStamp(ctx, o, img, placeholder = false, shadow = false) {
   if (!img && !placeholder) return;
+  if (img && (o.tintAmt > 0 || (o.bright && o.bright !== 0))) img = adjusted(img, o);
   ctx.save();
+  if (o.opacity != null && o.opacity < 1) ctx.globalAlpha = o.opacity;
   if (shadow && img) {
     // A soft shadow down and to the right, sized to the stamp. Shadows are
     // measured in screen pixels, so scale by the current zoom.
@@ -69,6 +71,40 @@ export function drawStamp(ctx, o, img, placeholder = false, shadow = false) {
     ctx.strokeRect(-o.w / 2, -o.h / 2, o.w, o.h);
   }
   ctx.restore();
+}
+
+// A stamp's picture with its tint (a colour laid over it, tintAmt 0…1) and
+// brightness (-1…1) applied. Made once per picture and setting, then reused.
+// Compositing rather than filters, so it works in every browser.
+const adjustedCache = new WeakMap(); // picture → Map(key → canvas)
+function adjusted(img, o) {
+  const key = `${o.tint || ''}:${o.tintAmt || 0}:${o.bright || 0}`;
+  let m = adjustedCache.get(img);
+  if (!m) adjustedCache.set(img, m = new Map());
+  if (m.has(key)) return m.get(key);
+  const w = img.naturalWidth || img.width, h = img.naturalHeight || img.height;
+  const c = makeCanvas(w, h), g = c.getContext('2d');
+  g.drawImage(img, 0, 0, w, h);
+  if (o.tintAmt > 0 && o.tint) {
+    // 'color' keeps the art's light and shade but takes the tint's hue.
+    g.globalCompositeOperation = 'color';
+    g.globalAlpha = o.tintAmt;
+    g.fillStyle = o.tint;
+    g.fillRect(0, 0, w, h);
+  }
+  if (o.bright) {
+    g.globalCompositeOperation = 'source-atop';
+    g.globalAlpha = Math.abs(o.bright) * 0.8;
+    g.fillStyle = o.bright > 0 ? '#fff' : '#000';
+    g.fillRect(0, 0, w, h);
+  }
+  // Keep the art's own outline (the colour blend also tints transparent areas).
+  g.globalAlpha = 1;
+  g.globalCompositeOperation = 'destination-in';
+  g.drawImage(img, 0, 0, w, h);
+  if (m.size > 20) m.delete(m.keys().next().value);
+  m.set(key, c);
+  return c;
 }
 
 // image(assetId) → a loaded picture or null (see images.js).
@@ -97,6 +133,33 @@ export function drawDoc(ctx, project, doc, { image = () => null, placeholder = f
   // Labels go on top of everything, so art never covers a name.
   if (!hidden.has('label')) for (const o of objs) if (o.kind === 'label') drawLabel(ctx, o);
   if (st.frame !== 'none') drawFrame(ctx, project, st.frame);
+  if (st.scaleBar !== 'none') drawScaleBar(ctx, project, st);
+}
+
+// A chequered bar of four sections with its distance written above, in a
+// bottom corner. scaleLength is the bar's length as a share of the map's width.
+function drawScaleBar(ctx, project, st) {
+  const { width: W, height: H } = project;
+  const u = Math.max(W, H) / 400;
+  const len = W * st.scaleLength, bh = u * 2.2;
+  const x = st.scaleBar === 'right' ? W - u * 20 - len : u * 20, y = H - u * 22;
+  ctx.save();
+  ctx.lineWidth = u * 0.5;
+  ctx.strokeStyle = '#2b2118';
+  for (let i = 0; i < 4; i++) {
+    ctx.fillStyle = i % 2 ? '#f4ead2' : '#2b2118';
+    ctx.fillRect(x + (len / 4) * i, y, len / 4, bh);
+  }
+  ctx.strokeRect(x, y, len, bh);
+  ctx.fillStyle = '#2b2118';
+  ctx.font = fontCSS('serif', u * 5);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'bottom';
+  ctx.fillText(st.scaleText || '', x + len / 2, y - u * 1.2);
+  ctx.font = fontCSS('serif', u * 3.6);
+  ctx.textBaseline = 'top';
+  ctx.textAlign = 'left'; ctx.fillText('0', x, y + bh + u);
+  ctx.restore();
 }
 
 // --- finishing: paper texture, grid, vignette, frame ----------------------
@@ -204,15 +267,18 @@ export const layerOf = (o) => ({ path: 'stroke', terrain: 'land' }[o.kind] || o.
 export const docStyle = (doc) => doc?.objects?.style && !doc.objects.style.deleted ? doc.objects.style : {};
 
 // The map's look: STYLE, with whatever the map's style object overrides.
-const STYLE_KEYS = ['sea', 'coast', 'land', 'coastWidth', 'rippleCount', 'stampShadow',
-  'grid', 'gridSize', 'gridOpacity', 'vignette', 'frame', 'overlay', 'overlayOpacity'];
-const FINISH = { grid: 'none', gridSize: 128, gridOpacity: 0.25, vignette: 0, frame: 'none', overlay: null, overlayOpacity: 0.35 };
+const STYLE_KEYS = ['sea', 'coast', 'land', 'coastWidth', 'rippleCount', 'coastStyle', 'stampShadow',
+  'grid', 'gridSize', 'gridOpacity', 'vignette', 'frame', 'overlay', 'overlayOpacity', 'scaleBar', 'scaleText', 'scaleLength'];
+const FINISH = {
+  coastStyle: 'ripples', grid: 'none', gridSize: 128, gridOpacity: 0.25, vignette: 0, frame: 'none', overlay: null, overlayOpacity: 0.35,
+  scaleBar: 'none', scaleText: '100 miles', scaleLength: 0.2,
+};
 export function mapStyle(doc) {
   const d = docStyle(doc), st = { ...STYLE, ...FINISH, rippleCount: STYLE.ripples.length, stampShadow: false };
   for (const k of STYLE_KEYS) if (d[k] != null) st[k] = d[k];
   // Rings spread evenly out to the default outermost one, however many there are.
   const far = Math.max(...STYLE.ripples);
-  st.ripples = Array.from({ length: st.rippleCount }, (_, i) => Math.round(far * (i + 1) / st.rippleCount));
+  st.ripples = st.coastStyle === 'ripples' ? Array.from({ length: st.rippleCount }, (_, i) => Math.round(far * (i + 1) / st.rippleCount)) : [];
   return st;
 }
 
@@ -277,6 +343,10 @@ function renderLand(project, land, terrain, scale, pics, landTexture, st) {
       landMask(r); paint(STYLE.ripple);
       landMask(r - STYLE.rippleWidth); paint(st.sea);
     }
+    if (st.coastStyle === 'hatch') {
+      // Engraved-map shading: fine diagonal lines in a band along the shore.
+      landMask(Math.max(...STYLE.ripples) * 0.8); paint(hatchPattern(m, st.coast, scale));
+    }
     if (st.coastWidth > 0) { landMask(st.coastWidth); paint(st.coast); }
     landMask(0); paint(base);
   } else {
@@ -305,15 +375,33 @@ function renderLand(project, land, terrain, scale, pics, landTexture, st) {
   return out;
 }
 
+// Diagonal hatching in the coast's colour, a line every 7 map pixels.
+function hatchPattern(ctx, colour, scale) {
+  const n = 64;
+  const c = makeCanvas(n, n), g = c.getContext('2d');
+  g.strokeStyle = colour;
+  g.globalAlpha = 0.55;
+  g.lineWidth = 3;
+  g.beginPath();
+  for (let i = -n; i <= n * 2; i += 16) { g.moveTo(i, n); g.lineTo(i + n, 0); }
+  g.stroke();
+  const pat = ctx.createPattern(c, 'repeat');
+  const k = 7 / 16; // map pixels per pattern pixel
+  pat.setTransform(new DOMMatrix([k, 0, 0, k, 0, 0]));
+  return pat;
+}
+
 // A stroke with feathered edges: soft (0…1) blurs up to half its width.
 // The blur is a canvas shadow (it works in every browser, unlike filters):
 // the stroke itself is drawn far off to the side, so only its shadow lands.
 const FAR = 100000;
+// opacity (0…1, default 1) makes the stroke partly see-through.
 export function softStroke(ctx, s, scale) {
+  const a = s.opacity ?? 1;
   const blur = Math.min(120, (s.soft || 0) * s.width * 0.5 * scale);
-  if (blur < 0.5) { strokePath(ctx, s.points, s.width); return; }
+  if (blur < 0.5) { ctx.save(); ctx.globalAlpha = a; strokePath(ctx, s.points, s.width); ctx.restore(); return; }
   ctx.save();
-  ctx.shadowColor = '#000';
+  ctx.shadowColor = `rgba(0, 0, 0, ${a})`;
   ctx.shadowBlur = blur;
   ctx.shadowOffsetX = FAR;
   ctx.translate(-FAR / scale, 0);
