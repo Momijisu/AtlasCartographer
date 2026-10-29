@@ -2,7 +2,7 @@
   "name": "AtlasCartographer",
   "short_name": "Cartographer",
   "description": "A fantasy map maker that works offline and syncs through OneDrive.",
-  "id": "./",
+  "id": "atlascartographer",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
