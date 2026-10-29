@@ -143,3 +143,6 @@ body.editing { overflow: hidden; overscroll-behavior: none; }
 .layer-row.off .layer-name { color: var(--muted); text-decoration: line-through; }
 .icon-gap { width: 38px; flex-shrink: 0; }
 .layers-panel .pk-actions { padding: .5rem .9rem .3rem; }
+.pk-search { min-height: 34px; padding: .3em .6em; font-size: .9rem; }
+.pk-found { margin: 0; }
+.pk-grid > p { grid-column: 1 / -1; }

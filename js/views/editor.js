@@ -868,25 +868,59 @@ class Editor {
     const rank = (p) => (p.type === mt && mt !== 'any' ? 0 : p.type === 'any' ? 1 : 2);
     packs.sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
     const kp = `ac.pickPack.${tex ? 'texture' : 'stamp'}.${mt}`, kc = `ac.pickCat.${tex ? 'texture' : 'stamp'}.${mt}`;
-    const pack = packs.find((p) => p.name === load(kp, '')) || packs[0];
-    const cat = pack.categories.find((c) => c.name === load(kc, '')) || pack.categories[0];
-    const list = A.liveAssets().filter((a) => a.pack === pack.name && a.category === cat.name)
-      .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+    // What to show: a search across every pack, art used recently, or one
+    // pack's category.
+    const kind = tex ? 'texture' : 'stamp';
+    const query = (this.pickQuery || '').trim().toLowerCase();
+    const recentMode = load(kp, '') === RECENT;
+    const pack = recentMode ? null : packs.find((p) => p.name === load(kp, '')) || packs[0];
+    const cat = pack && (pack.categories.find((c) => c.name === load(kc, '')) || pack.categories[0]);
+    const order = new Map(packs.map((p, i) => [p.name, i]));
+    let list;
+    if (query) {
+      const words = query.split(/\s+/);
+      list = A.liveAssets().filter((a) => a.kind === kind && order.has(a.pack)
+        && words.every((w) => `${a.name} ${a.category} ${a.pack}`.toLowerCase().includes(w)))
+        .sort((a, b) => order.get(a.pack) - order.get(b.pack) || a.name.localeCompare(b.name, undefined, { numeric: true }))
+        .slice(0, 300);
+    } else if (recentMode) {
+      list = recent(kind).map((id) => A.asset(id)).filter((a) => a && a.kind === kind);
+    } else {
+      list = A.liveAssets().filter((a) => a.pack === pack.name && a.category === cat.name)
+        .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+    }
     const chosen = new Set(mode === 'texture' ? [docStyle(this.doc).landTexture] : mode === 'terrain' ? [this.terrainTex] : mode === 'overlay' ? [docStyle(this.doc).overlay] : this.brush);
     el.innerHTML = `<header><b>${title}</b>
         ${tex ? '' : `<label class="check small"><input type="checkbox" class="pk-multi" ${this.multi ? 'checked' : ''}> Pick several</label>`}
         <button class="icon-btn" data-close aria-label="Close">${icon('x')}</button></header>
       <div class="pk-filters">
-        <select class="pk-pack" aria-label="Pack">${packs.map((p) => `<option value="${esc(p.name)}" ${p === pack ? 'selected' : ''}>${esc(p.name)}${rank(p) === 2 ? ` (${esc(A.PACK_TYPES.find(([v]) => v === p.type)?.[1] || '')})` : ''}</option>`).join('')}</select>
-        <select class="pk-cat" aria-label="Category">${pack.categories.map((c) => `<option value="${esc(c.name)}" ${c === cat ? 'selected' : ''}>${esc(c.name || 'General')} (${c.count})</option>`).join('')}</select>
+        <input type="search" class="pk-search" placeholder="Search all art…" value="${esc(this.pickQuery || '')}" aria-label="Search art">
+        ${query ? `<p class="muted small pk-found">${list.length === 300 ? 'First 300 matches' : `${list.length} ${list.length === 1 ? 'match' : 'matches'}`}</p>` : `
+        <select class="pk-pack" aria-label="Pack"><option value="${RECENT}" ${recentMode ? 'selected' : ''}>Recently used</option>${packs.map((p) => `<option value="${esc(p.name)}" ${p === pack ? 'selected' : ''}>${esc(p.name)}${rank(p) === 2 ? ` (${esc(A.PACK_TYPES.find(([v]) => v === p.type)?.[1] || '')})` : ''}</option>`).join('')}</select>
+        ${recentMode ? '' : `<select class="pk-cat" aria-label="Category">${pack.categories.map((c) => `<option value="${esc(c.name)}" ${c === cat ? 'selected' : ''}>${esc(c.name || 'General')} (${c.count})</option>`).join('')}</select>`}`}
       </div>
       <div class="pk-actions">${tex ? `<button class="btn small${mode === 'terrain' && !this.terrainTex ? ' on' : ''}" data-plain>${plainLabel}</button>`
         : `<button class="btn small" data-all>Use all ${list.length}</button><span class="muted small">${this.brush.length} chosen</span>`}</div>
-      <div class="pk-grid">${list.map((a) => `<button class="tile${chosen.has(a.id) ? ' on' : ''}" data-id="${a.id}" title="${esc(a.name)}">${icon('image')}</button>`).join('')}</div>`;
+      <div class="pk-grid">${list.length ? list.map((a) => `<button class="tile${chosen.has(a.id) ? ' on' : ''}" data-id="${a.id}" title="${esc(a.name)}${query || recentMode ? ` · ${esc(a.pack)} / ${esc(a.category || 'General')}` : ''}">${icon('image')}</button>`).join('')
+        : `<p class="muted small">${query ? 'Nothing matches.' : 'Nothing used yet.'}</p>`}</div>`;
     $('[data-close]', el).onclick = () => { el.hidden = true; };
     $('.pk-multi', el)?.addEventListener('change', (e) => { this.multi = e.target.checked; keep('ac.multi', this.multi); });
-    $('.pk-pack', el).onchange = (e) => { keep(kp, e.target.value); keep(kc, ''); this.renderPicker(); };
-    $('.pk-cat', el).onchange = (e) => { keep(kc, e.target.value); this.renderPicker(); };
+    $('.pk-pack', el)?.addEventListener('change', (e) => { keep(kp, e.target.value); keep(kc, ''); this.renderPicker(); });
+    $('.pk-cat', el)?.addEventListener('change', (e) => { keep(kc, e.target.value); this.renderPicker(); });
+    const search = $('.pk-search', el);
+    let typing;
+    search.oninput = () => {
+      clearTimeout(typing);
+      typing = setTimeout(() => {
+        const at = search.selectionStart;
+        this.pickQuery = search.value;
+        this.renderPicker();
+        // Keep typing where you were.
+        const again = $('.pk-search', el);
+        again.focus();
+        again.setSelectionRange(at, at);
+      }, 180);
+    };
     $('[data-all]', el)?.addEventListener('click', () => this.setBrush(list.map((a) => a.id)));
     $('[data-plain]', el)?.addEventListener('click', () => { plain(); this.renderPicker(); });
     $('.pk-grid', el).onclick = (e) => {
@@ -895,6 +929,7 @@ class Editor {
       const id = t.dataset.id;
       if (tex) {
         pick(id);
+        useRecent('texture', [id]);
         for (const x of $$('.tile', el)) x.classList.toggle('on', x === t);
         return;
       }
@@ -1255,6 +1290,7 @@ class Editor {
       this.commit({ undo: gone.map(clean), redo: gone.map((o) => ({ id: o.id, deleted: true })) });
     } else if (g.kind === 'place') {
       const o = clean(this.doc.objects[g.id]);
+      useRecent('stamp', [o.asset]);
       this.commit({ undo: [{ id: o.id, deleted: true }], redo: [o] });
     } else if (g.kind === 'move' && g.moved) {
       this.commit({ undo: g.origs, redo: g.origs.map((o) => clean(this.doc.objects[o.id])) });
@@ -1272,6 +1308,7 @@ class Editor {
     } else if (g.kind === 'scatter' && g.placed.length) {
       // Stamps lower on the map overlap the ones behind them, like a landscape.
       const z0 = this.nextZ();
+      useRecent('stamp', [...new Set(g.placed.map((id) => this.doc.objects[id].asset))]);
       const placed = g.placed.map((id) => this.doc.objects[id]).sort((a, b) => (a.y + a.h / 2) - (b.y + b.h / 2))
         .map((o, i) => ({ ...clean(o), z: z0 + i }));
       this.commit({ undo: placed.map((o) => ({ id: o.id, deleted: true })), redo: placed });
@@ -1430,4 +1467,11 @@ function nearLine(p, x, y, r) {
   if (p.length === 2) return Math.hypot(p[0] - x, p[1] - y) <= r;
   for (let i = 0; i < p.length - 2; i += 2) if (segDist(x, y, p[i], p[i + 1], p[i + 2], p[i + 3]) <= r) return true;
   return false;
+}
+
+// Art used recently on this device, newest first, for the picker.
+const RECENT = ' recent'; // pack names are trimmed, so none starts with a space
+const recent = (kind) => load(`ac.recent.${kind}`, []);
+function useRecent(kind, ids) {
+  keep(`ac.recent.${kind}`, [...ids, ...recent(kind).filter((x) => !ids.includes(x))].slice(0, 60));
 }
