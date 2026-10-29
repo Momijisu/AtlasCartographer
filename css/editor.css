@@ -78,3 +78,8 @@ body.editing { overflow: hidden; overscroll-behavior: none; }
 .toolbar .land-size { width: 96px; min-height: 0; padding: 0; flex-shrink: 0; accent-color: var(--rubric); background: transparent; border: 0; }
 .chip-plain { width: 100%; height: 100%; border-radius: 3px; background: #e9dcbc; box-shadow: inset 0 0 0 2px #3b2f22; }
 @media (max-width: 600px) { .toolbar .land-size { width: 72px; } }
+
+.label-preview { display: block; width: 100%; height: auto; margin: 0 0 1rem; border: 1px solid var(--rule); border-radius: var(--r); }
+.label-form .swatches { margin: 0 0 1rem; padding: 0; }
+.label-form .row { display: grid; grid-template-columns: 1fr 1fr; gap: .7rem; }
+.label-form input[type="range"] { min-height: 0; padding: 0; border: 0; background: transparent; accent-color: var(--rubric); }

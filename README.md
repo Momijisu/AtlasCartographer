@@ -10,8 +10,9 @@ Early. What works today:
 
 - Projects: create, rename and delete maps at a few preset sizes
 - Editor: pan and zoom (mouse, wheel, touch, pinch), an ink pen in five colours, an eraser, undo and redo
-- Land and water: paint land, carve water (or hold Alt to switch), and the coastline, its outline and ripple rings in the sea draw themselves. Fill the land with any texture from the library
+- Land and water: paint land, carve water (or hold Alt to switch), and the coastline, its outline and ripple rings in the sea draw themselves. Fill the land with any texture from the library. On PC the land is drawn at the map's full resolution; phones and tablets use a lighter version (Settings → Land detail)
 - Stamps from the art library: place one, or paint many with the scatter brush (randomly chosen from the pictures you pick, nudged, resized and mirrored a little, overlapping front to back). Select a stamp to move, scale (corners), rotate (top handle; Shift snaps to 15°), flip, bring forward, send back or delete
+- Labels: straight or curved text in six fonts, with colour, letter spacing, capitals and a soft outline. Move, rotate and resize them like stamps; Enter or a double-click edits
 - Export as PNG, WebP or JPEG, at full size or smaller, with every stamp's full-size art (ready to upload to WorldAtlas Maps)
 - OneDrive sync of every project, merged stroke by stroke, so edits from two devices both survive
 - Art library: import a folder or zip of images (PNG, WebP, JPEG, GIF, SVG, AVIF). The top folder is the pack; folders inside it are categories, each marked as stamps or textures. Duplicates are skipped.
@@ -20,9 +21,8 @@ Early. What works today:
 
 Planned, in order:
 
-1. Curved text labels, layers
+1. Layers (show, hide, lock)
 2. More land styles: coast colours and widths, painted terrain textures (forest floor, desert…) over the land
-3. Sharper land when zoomed far in (the land layer is drawn at up to 2048 pixels across)
 
 ## Editor shortcuts
 
@@ -30,6 +30,7 @@ Planned, in order:
 |---|---|---|---|
 | H / Space | move the view | V | select |
 | L | land and water | Alt (while painting) | the other one |
+| T | text | Enter | edit the selected label |
 | B | ink pen | E | eraser |
 | S | stamp | R | scatter |
 | [ ] | smaller / larger (or send back / bring forward) | F | flip |

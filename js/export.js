@@ -4,7 +4,7 @@
 // stay under that.
 import * as store from './store.js';
 import * as images from './images.js';
-import { drawDoc } from './render.js';
+import { drawDoc, fontCSS } from './render.js';
 import { $, esc, modal, toast, download } from './util.js';
 
 const MAX_PIXELS = 16_000_000;
@@ -52,6 +52,9 @@ export async function renderMap(project, { type = 'image/png', scale = 1 } = {})
   let missing = 0;
   await Promise.all(ids.map(async (id) => { const img = await images.full(id); if (img) pics.set(id, img); else missing++; }));
   if (missing) toast(`${missing} picture${missing === 1 ? ' isn’t' : 's aren’t'} available yet and will be left out`, 5000);
+  // Labels' fonts too: the browser only fetches a font once something asks for it.
+  const fonts = new Set(store.liveObjects(doc).filter((o) => o.kind === 'label').map((o) => o.font));
+  await Promise.all([...fonts].map((f) => document.fonts.load(fontCSS(f, 40)).catch(() => {})));
   const c = document.createElement('canvas');
   c.width = Math.round(project.width * scale);
   c.height = Math.round(project.height * scale);

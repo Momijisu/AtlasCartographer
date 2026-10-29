@@ -6,10 +6,10 @@
 import * as store from '../store.js';
 import * as A from '../assets.js';
 import * as images from '../images.js';
-import { $, $$, esc, uid, toast } from '../util.js';
+import { $, $$, esc, uid, toast, modal } from '../util.js';
 import { icon } from '../icons.js';
 import { setTitle, state } from '../ui.js';
-import { drawDoc, drawStroke, strokePath, docStyle, STYLE } from '../render.js';
+import { drawDoc, drawStroke, strokePath, docStyle, STYLE, editorLandScale, labelBox, drawLabel, FONTS, fontCSS } from '../render.js';
 import { exportDialog } from '../export.js';
 
 const INKS = ['#2b2118', '#6b4a2b', '#2f5d7c', '#3f6b3a', '#8e2f22'];
@@ -17,12 +17,13 @@ const TOOLS = [
   ['pan', 'hand-pointing', 'Move the view (H, or hold Space)'],
   ['select', 'arrows-out-cardinal', 'Select, move, scale and rotate stamps (V)'],
   ['land', 'globe-hemisphere-west', 'Land and water (L)'],
+  ['text', 'text-b', 'Text: click to add a label, or click one to edit it (T)'],
   ['pen', 'pencil-line', 'Ink pen (B)'],
   ['eraser', 'x', 'Eraser (E)'],
   ['stamp', 'mountains', 'Stamp: place art from the library (S)'],
   ['scatter', 'tree-evergreen', 'Scatter: paint many stamps at once (R)'],
 ];
-const KEYS = { h: 'pan', v: 'select', l: 'land', b: 'pen', e: 'eraser', s: 'stamp', r: 'scatter' };
+const KEYS = { h: 'pan', v: 'select', l: 'land', t: 'text', b: 'pen', e: 'eraser', s: 'stamp', r: 'scatter' };
 const HANDLE = 9; // screen pixels
 const ROT_OFFSET = 34;
 
@@ -61,6 +62,7 @@ export async function viewEditor(view, id) {
           <input type="range" class="stamp-size" min="0" max="100" step="1" title="Stamp size ([ and ])" aria-label="Stamp size">
         </span>
         <span class="tb-group" data-for="select">
+          <button class="tool" data-act="edit-text" title="Edit the text (Enter)" aria-label="Edit the text">${icon('pencil-simple')}</button>
           <button class="tool" data-act="flip" title="Flip (F)" aria-label="Flip">${icon('arrows-clockwise')}</button>
           <button class="tool" data-act="front" title="Bring to front (])" aria-label="Bring to front">${icon('arrow-up')}</button>
           <button class="tool" data-act="back" title="Send to back ([)" aria-label="Send to back">${icon('arrow-down')}</button>
@@ -141,9 +143,7 @@ class Editor {
     this.redraw();
   }
 
-  // The land layer is drawn at up to 2048 pixels across, to keep its memory
-  // reasonable on phones.
-  landScale() { return Math.min(1, 2048 / Math.max(this.project.width, this.project.height)); }
+  landScale() { return editorLandScale(this.project); }
 
   minScale() { return Math.min(this.vw / this.project.width, this.vh / this.project.height) * 0.5; }
 
@@ -231,33 +231,42 @@ class Editor {
     return o;
   }
 
-  // Map-space corners of a stamp: top-left, top-right, bottom-right, bottom-left.
+  // Stamps and labels can be selected and transformed; this is their box.
+  box(o) {
+    return o.kind === 'label' ? labelBox(o) : { cx: o.x, cy: o.y, w: o.w, h: o.h, rot: o.rot || 0 };
+  }
+
+  // Map-space corners of an object's box: top-left, top-right, bottom-right, bottom-left.
   corners(o) {
-    const cos = Math.cos(o.rot || 0), sin = Math.sin(o.rot || 0);
+    const b = this.box(o);
+    const cos = Math.cos(b.rot), sin = Math.sin(b.rot);
     return [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([sx, sy]) => {
-      const lx = sx * o.w / 2, ly = sy * o.h / 2;
-      return [o.x + lx * cos - ly * sin, o.y + lx * sin + ly * cos];
+      const lx = sx * b.w / 2, ly = sy * b.h / 2;
+      return [b.cx + lx * cos - ly * sin, b.cy + lx * sin + ly * cos];
     });
   }
 
   // Screen position of the rotate handle, a fixed distance above the top edge.
   rotHandle(o) {
-    const [cx, cy] = this.toScreen(o.x, o.y);
-    const d = (o.h / 2) * this.s + ROT_OFFSET;
-    const a = (o.rot || 0) - Math.PI / 2;
+    const b = this.box(o);
+    const [cx, cy] = this.toScreen(b.cx, b.cy);
+    const d = (b.h / 2) * this.s + ROT_OFFSET;
+    const a = b.rot - Math.PI / 2;
     return [cx + Math.cos(a) * d, cy + Math.sin(a) * d];
   }
 
-  inStamp(o, mx, my, pad = 0) {
-    const cos = Math.cos(-(o.rot || 0)), sin = Math.sin(-(o.rot || 0));
-    const dx = mx - o.x, dy = my - o.y;
+  inBox(o, mx, my, pad = 0) {
+    const b = this.box(o);
+    const cos = Math.cos(-b.rot), sin = Math.sin(-b.rot);
+    const dx = mx - b.cx, dy = my - b.cy;
     const lx = dx * cos - dy * sin, ly = dx * sin + dy * cos;
-    return Math.abs(lx) <= o.w / 2 + pad && Math.abs(ly) <= o.h / 2 + pad;
+    return Math.abs(lx) <= b.w / 2 + pad && Math.abs(ly) <= b.h / 2 + pad;
   }
 
-  stampAt(mx, my) {
-    const list = store.liveObjects(this.doc).filter((o) => o.kind === 'stamp').sort((a, b) => (b.z || 0) - (a.z || 0));
-    return list.find((o) => this.inStamp(o, mx, my)) || null;
+  // The topmost stamp or label under a map point.
+  objectAt(mx, my, kinds = ['stamp', 'label']) {
+    const list = store.liveObjects(this.doc).filter((o) => kinds.includes(o.kind)).sort((a, b) => (b.z || 0) - (a.z || 0));
+    return list.find((o) => this.inBox(o, mx, my)) || null;
   }
 
   // A new stamp from the brush (a random pick when it holds several), its
@@ -328,7 +337,7 @@ class Editor {
   hits([mx, my], radius) {
     const out = [];
     for (const o of store.liveObjects(this.doc)) {
-      if (o.kind === 'stamp') { if (this.inStamp(o, mx, my, radius)) out.push(o); continue; }
+      if (o.kind === 'stamp' || o.kind === 'label') { if (this.inBox(o, mx, my, radius)) out.push(o); continue; }
       if (o.kind !== 'stroke') continue;
       const p = o.points, r = radius + o.width / 2;
       if (p.length === 2) { if (Math.hypot(p[0] - mx, p[1] - my) <= r) out.push(o); continue; }
@@ -359,8 +368,10 @@ class Editor {
     $('.stamp-size', this.root).value = sliderFromSize(this.stampSize);
     $('.land-size', this.root).value = sliderFromSize(this.landSize);
     for (const b of $$('[data-landmode]', this.root)) b.classList.toggle('on', b.dataset.landmode === this.landMode);
-    const hasSel = !!this.selectedObj();
-    for (const b of $$('[data-for="select"] button', this.root)) b.disabled = !hasSel;
+    const sel = this.selectedObj();
+    for (const b of $$('[data-for="select"] button', this.root)) b.disabled = !sel;
+    $('[data-act="edit-text"]', this.root).hidden = sel?.kind !== 'label';
+    $('[data-act="flip"]', this.root).hidden = sel?.kind === 'label';
     this.canvas.style.cursor = panning ? (this.gesture?.kind === 'pan' ? 'grabbing' : 'grab') : this.tool === 'select' ? 'default' : 'crosshair';
     this.renderChip();
   }
@@ -467,6 +478,38 @@ class Editor {
     this.syncToolbar();
   }
 
+  // --- labels -----------------------------------------------------------
+
+  async newLabel(mx, my) {
+    const base = {
+      font: 'serif', color: INKS[0], spacing: 0.12, curve: 0, caps: false, halo: true,
+      size: Math.round(Math.max(this.project.width, this.project.height) / 40),
+      ...load('ac.labelStyle', {}),
+    };
+    const v = await labelDialog({ ...base, text: '' }, 'New label');
+    if (!v?.text) return;
+    const o = { id: uid(), kind: 'label', x: r1(mx), y: r1(my), rot: 0, z: this.nextZ(), ...v };
+    this.rememberStyle(v);
+    this.selected = o.id;
+    if (this.tool !== 'text') this.setTool('select');
+    await this.commit({ undo: [{ id: o.id, deleted: true }], redo: [o] });
+    this.syncToolbar();
+  }
+
+  async editLabel(o) {
+    if (!o) return;
+    const v = await labelDialog(clean(o), 'Edit label');
+    if (!v) return;
+    if (!v.text) { this.selected = o.id; this.deleteSelected(); return; }
+    this.rememberStyle(v);
+    this.selected = o.id;
+    await this.commit({ undo: [clean(o)], redo: [{ ...clean(o), ...v }] });
+    this.syncToolbar();
+  }
+
+  // The next new label starts in the style of the last one made or edited.
+  rememberStyle({ text, ...style }) { keep('ac.labelStyle', style); }
+
   // --- input ------------------------------------------------------------
 
   wire() {
@@ -487,6 +530,7 @@ class Editor {
       else if (act === 'front') this.editSelected({ z: this.nextZ() });
       else if (act === 'back') this.editSelected({ z: this.zRange()[0] - 1 });
       else if (act === 'delete') this.deleteSelected();
+      else if (act === 'edit-text') this.editLabel(this.selectedObj());
     };
     $('.width', this.root).oninput = (e) => { this.width = +e.target.value; keep('ac.width', this.width); };
     $('.stamp-size', this.root).oninput = (e) => { this.stampSize = sizeFromSlider(+e.target.value); keep('ac.stampSize', this.stampSize); };
@@ -503,6 +547,13 @@ class Editor {
     this.on(c, 'pointerup', (e) => this.up(e));
     this.on(c, 'pointercancel', (e) => this.up(e, true));
     this.on(c, 'contextmenu', (e) => e.preventDefault());
+    this.on(c, 'dblclick', (e) => {
+      if (this.tool !== 'select') return;
+      const hit = this.objectAt(...this.toMap(...this.local(e)), ['label']);
+      if (hit) this.editLabel(hit);
+    });
+    // Labels measure their letters, so draw again once the fonts have loaded.
+    Promise.all(Object.keys(FONTS).map((k) => document.fonts.load(fontCSS(k, 40)))).then(() => this.redraw(), () => {});
     this.on(c, 'wheel', (e) => {
       e.preventDefault();
       const [cx, cy] = this.local(e);
@@ -524,6 +575,7 @@ class Editor {
     if (e.key === ' ') { e.preventDefault(); if (!this.spaceDown) { this.spaceDown = true; this.syncToolbar(); } return; }
     const sel = this.selectedObj();
     if (sel && (e.key === 'Delete' || e.key === 'Backspace')) { e.preventDefault(); this.deleteSelected(); return; }
+    if (sel?.kind === 'label' && e.key === 'Enter') { e.preventDefault(); this.editLabel(sel); return; }
     if (e.key === 'Escape') { this.selected = null; $('.picker', this.root).hidden = true; this.syncToolbar(); this.redraw(); return; }
     if (KEYS[k]) this.setTool(KEYS[k]);
     else if (k === '0') this.fit();
@@ -570,6 +622,11 @@ class Editor {
       // Alt (Option) paints the other way, for quick fixes along a coast.
       const mode = e.altKey ? (this.landMode === 'add' ? 'erase' : 'add') : this.landMode;
       this.gesture = { kind: 'land', stroke: { id: uid(), kind: 'land', mode, width: this.landSize, points: [r1(mx), r1(my)] } };
+    } else if (this.tool === 'text') {
+      const hit = this.objectAt(mx, my, ['label']);
+      if (hit) this.editLabel(hit);
+      else this.newLabel(mx, my);
+      return;
     } else if (this.tool === 'pen') {
       this.gesture = { kind: 'draw', stroke: { id: uid(), kind: 'stroke', color: this.ink, width: this.width, points: [r1(mx), r1(my)] } };
     } else if (this.tool === 'eraser') {
@@ -607,7 +664,7 @@ class Editor {
         }
       }
     }
-    const hit = this.stampAt(mx, my);
+    const hit = this.objectAt(mx, my);
     this.selected = hit?.id || null;
     return hit ? { kind: 'move', id: hit.id, orig: clean(hit), from: [mx, my] } : null;
   }
@@ -644,8 +701,10 @@ class Editor {
       g.moved = true;
     } else if (g.kind === 'scale') {
       const o = g.orig;
-      const k = Math.max(4 / Math.max(o.w, o.h), Math.hypot(mx - o.x, my - o.y) / g.d0);
-      this.doc.objects[g.id] = { ...this.doc.objects[g.id], w: r1(o.w * k), h: r1(o.h * k) };
+      const k = Math.hypot(mx - o.x, my - o.y) / g.d0;
+      this.doc.objects[g.id] = o.kind === 'label'
+        ? { ...this.doc.objects[g.id], size: r1(Math.max(4, o.size * k)) }
+        : { ...this.doc.objects[g.id], ...((s) => ({ w: r1(o.w * s), h: r1(o.h * s) }))(Math.max(4 / Math.max(o.w, o.h), k)) };
       g.moved = true;
     } else if (g.kind === 'rotate') {
       let rot = (g.orig.rot || 0) + Math.atan2(my - g.orig.y, mx - g.orig.x) - g.a0;
@@ -753,4 +812,58 @@ function segDist(px, py, ax, ay, bx, by) {
   let t = len ? ((px - ax) * dx + (py - ay) * dy) / len : 0;
   t = Math.max(0, Math.min(1, t));
   return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+}
+
+// The label editor: text and style, with a live preview.
+function labelDialog(o, title) {
+  const swatches = [...INKS, '#ffffff'];
+  return modal(title, `<form class="form label-form">
+      <label>Text<input name="text" maxlength="200" value="${esc(o.text)}" placeholder="The Sunken Reach" autocomplete="off"></label>
+      <canvas class="label-preview" width="560" height="150"></canvas>
+      <div class="row">
+        <label>Font<select name="font">${Object.entries(FONTS).map(([k, [name]]) => `<option value="${k}" ${k === o.font ? 'selected' : ''}>${name}</option>`).join('')}</select></label>
+        <label>Size <small>map pixels</small><input name="size" type="number" min="4" max="2000" step="1" value="${Math.round(o.size)}"></label>
+      </div>
+      <div class="field-label">Colour</div>
+      <div class="swatches label-swatches">${swatches.map((c) => `<button type="button" class="swatch${c === o.color ? ' on' : ''}" data-c="${c}" style="--c:${c}" aria-label="Colour ${c}"></button>`).join('')}</div>
+      <label>Curve <small>bend up or down</small><input name="curve" type="range" min="-100" max="100" step="1" value="${Math.round((o.curve || 0) * 100)}"></label>
+      <label>Letter spacing<input name="spacing" type="range" min="0" max="100" step="1" value="${Math.round((o.spacing || 0) * 100)}"></label>
+      <label class="check"><input type="checkbox" name="caps" ${o.caps ? 'checked' : ''}> Capitals</label>
+      <label class="check"><input type="checkbox" name="halo" ${o.halo ? 'checked' : ''}> Soft outline, to stand out over busy art</label>
+      <div class="actions"><button type="button" class="btn quiet" data-cancel>Cancel</button><button class="btn primary">Done</button></div>
+    </form>`, {
+    onMount: (m, close) => {
+      const f = $('form', m);
+      let color = o.color || INKS[0];
+      const read = () => ({
+        text: f.text.value.trim(), font: f.font.value, size: Math.max(4, +f.size.value || o.size), color,
+        curve: +f.curve.value / 100, spacing: +f.spacing.value / 100, caps: f.caps.checked, halo: f.halo.checked,
+      });
+      const cv = $('.label-preview', m);
+      const draw = () => {
+        const v = read();
+        const ctx = cv.getContext('2d');
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.fillStyle = STYLE.land;
+        ctx.fillRect(0, 0, cv.width, cv.height);
+        const p = { ...v, text: v.text || 'Preview', x: 0, y: 0, rot: 0 };
+        const b = labelBox(p);
+        const k = Math.min(1, (cv.width - 40) / b.w, (cv.height - 20) / b.h) || 1;
+        ctx.setTransform(k, 0, 0, k, cv.width / 2 - (b.cx * k), cv.height / 2 - (b.cy * k));
+        drawLabel(ctx, p);
+      };
+      f.addEventListener('input', draw);
+      $('.label-swatches', m).onclick = (e) => {
+        const b = e.target.closest('.swatch');
+        if (!b) return;
+        color = b.dataset.c;
+        for (const x of $('.label-swatches', m).children) x.classList.toggle('on', x === b);
+        draw();
+      };
+      $('[data-cancel]', m).onclick = () => close(null);
+      f.onsubmit = (e) => { e.preventDefault(); close(read()); };
+      document.fonts.ready.then(draw);
+      draw();
+    },
+  });
 }

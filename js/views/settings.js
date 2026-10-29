@@ -5,6 +5,7 @@ import * as sync from '../sync.js';
 import { $, esc, toast, timeAgo, confirmDialog } from '../util.js';
 import { icon } from '../icons.js';
 import { setTitle, state } from '../ui.js';
+import { landDetail } from '../render.js';
 
 export function applyTheme() {
   document.documentElement.dataset.theme = localStorage.getItem('ac.theme') || 'dark';
@@ -33,6 +34,13 @@ export function viewSettings(view) {
         <button data-t="light">Vellum</button>
         <button data-t="auto">Match device</button>
       </div>
+      <div class="field-label" style="margin-top:1.2rem">Land detail in the editor</div>
+      <div class="seg" id="detailSeg">
+        <button data-d="auto">Automatic</button>
+        <button data-d="standard">Standard</button>
+        <button data-d="full">Full</button>
+      </div>
+      <p class="muted small">Full draws coastlines at the map’s own resolution, sharp at any zoom; Standard uses far less memory. Automatic picks Standard on phones and tablets and Full elsewhere. Exports are always full.</p>
     </div>
     <p class="muted small center">AtlasCartographer ${esc(self.AC_VERSION)} · ${esc(self.AC_BUILD)}</p>
   </div>`;
@@ -46,6 +54,15 @@ export function viewSettings(view) {
     applyTheme(); mark();
   };
   mark();
+  const dseg = $('#detailSeg');
+  const markD = () => { for (const b of dseg.children) b.classList.toggle('on', b.dataset.d === landDetail()); };
+  dseg.onclick = (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    try { localStorage.setItem('ac.landDetail', b.dataset.d); } catch { /* private mode */ }
+    markD();
+  };
+  markD();
   $('#installBtn')?.addEventListener('click', () => state.promptInstall().then(() => state.route()));
 }
 

@@ -75,6 +75,7 @@ export function drawDoc(ctx, project, doc, { image = () => null, placeholder = f
   for (const o of objs) {
     if (o.kind === 'stroke') drawStroke(ctx, o);
     else if (o.kind === 'stamp') drawStamp(ctx, o, image(o.asset), placeholder);
+    else if (o.kind === 'label') drawLabel(ctx, o);
   }
 }
 
@@ -96,7 +97,20 @@ export function drawThumb(canvas, project, doc, opts, maxW = 480, maxH = 360) {
 // gives the land's outline pushed d pixels out to sea. From the outside in:
 // sea, ripple rings, a dark coastline, then the land fill on top.
 
-const layers = new Map(); // `${project.id}:${scale}` → { sig, canvas }
+const layers = new Map(); // project id (or id:thumb) → { sig, canvas }
+
+// How sharp the land is in the editor. A land layer at full resolution takes
+// 4 bytes a pixel (48 MB for a 4096 × 3072 map), more than phones and tablets
+// comfortably spare, so on touch-first devices it's drawn at up to 2048
+// pixels across and scaled up; elsewhere at the map's own resolution.
+// Settings can choose either way on any device.
+export const landDetail = () => { try { return localStorage.getItem('ac.landDetail') || 'auto'; } catch { return 'auto'; } };
+const touchFirst = () => matchMedia('(pointer: coarse)').matches && !matchMedia('(hover: hover)').matches;
+export function editorLandScale(project) {
+  const d = landDetail();
+  const max = d === 'standard' || (d === 'auto' && touchFirst()) ? 2048 : 8192;
+  return Math.min(1, max / Math.max(project.width, project.height));
+}
 
 export const docStyle = (doc) => doc?.objects?.style && !doc.objects.style.deleted ? doc.objects.style : {};
 
@@ -104,8 +118,9 @@ function landLayer(project, doc, land, scale, image, cache) {
   const style = docStyle(doc);
   const tex = style.landTexture ? image(style.landTexture) : null;
   if (!cache) return renderLand(project, land, scale, tex);
-  const sig = land.map((o) => o.id + ':' + o.updatedAt).join() + `|${project.width}x${project.height}|${style.landTexture || ''}:${tex ? tex.naturalWidth : 0}`;
-  const key = `${project.id}:${scale}`;
+  const sig = land.map((o) => o.id + ':' + o.updatedAt).join() + `|${project.width}x${project.height}@${scale}|${style.landTexture || ''}:${tex ? tex.naturalWidth : 0}`;
+  // Thumbnails get their own slot, so the home page doesn't evict the editor's layer.
+  const key = scale < 0.2 ? `${project.id}:thumb` : project.id;
   const hit = layers.get(key);
   if (hit && hit.sig === sig) return hit.canvas;
   const canvas = renderLand(project, land, scale, tex);
@@ -156,4 +171,85 @@ function makeCanvas(w, h) {
   const c = document.createElement('canvas');
   c.width = w; c.height = h;
   return c;
+}
+
+// --- labels -------------------------------------------------------------
+//
+// Text on the map: { text, x, y, size (map px), font, color, spacing (em),
+// curve (-1…1: how far it bends, up like a hill when positive, down like a
+// valley when negative; 1 is a half circle), rot, caps, halo }.
+
+export const FONTS = {
+  serif: ['Classic', (px) => `600 ${px}px Cormorant`],
+  bold: ['Classic bold', (px) => `700 ${px}px Cormorant`],
+  italic: ['Italic', (px) => `italic 500 ${px}px Cormorant`],
+  sans: ['Plain', (px) => `500 ${px}px "Alegreya Sans"`],
+  script: ['Script', (px) => `400 ${px}px "Cedarville Cursive"`],
+  hand: ['Handwritten', (px) => `400 ${px}px Kalam`],
+};
+export const fontCSS = (key, px) => (FONTS[key] || FONTS.serif)[1](px);
+export const HALO = 'rgba(233, 220, 188, .85)';
+
+let measureCtx;
+// Character advances for a label, and the arc it sits on.
+function layout(o) {
+  measureCtx ??= document.createElement('canvas').getContext('2d');
+  const text = o.caps ? o.text.toUpperCase() : o.text;
+  measureCtx.font = fontCSS(o.font, o.size);
+  const chars = [...text];
+  const widths = chars.map((c) => measureCtx.measureText(c).width);
+  const gap = (o.spacing || 0) * o.size;
+  const total = widths.reduce((a, b) => a + b, 0) + gap * Math.max(0, chars.length - 1);
+  const bend = Math.max(-1, Math.min(1, o.curve || 0));
+  const R = Math.abs(bend) > 0.01 ? total / (Math.abs(bend) * Math.PI) : 0;
+  return { chars, widths, gap, total, bend, R };
+}
+
+// The label's bounding box: centre, size and rotation, in map pixels.
+export function labelBox(o) {
+  const { total, bend, R } = layout(o);
+  const lineH = o.size * 1.25;
+  if (!R) return { cx: o.x, cy: o.y, w: Math.max(total, o.size), h: lineH, rot: o.rot || 0 };
+  const half = total / R / 2; // half the angle the text spans
+  const sag = R * (1 - Math.cos(half));
+  const w = Math.max(2 * R * Math.sin(Math.min(half, Math.PI / 2)), o.size);
+  const dy = Math.sign(bend) * sag / 2; // the arc's middle, below (or above) the text's anchor
+  const rot = o.rot || 0;
+  return { cx: o.x - Math.sin(rot) * dy, cy: o.y + Math.cos(rot) * dy, w, h: lineH + sag, rot };
+}
+
+export function drawLabel(ctx, o) {
+  if (!o.text) return;
+  const { chars, widths, gap, total, bend, R } = layout(o);
+  ctx.save();
+  ctx.translate(o.x, o.y);
+  if (o.rot) ctx.rotate(o.rot);
+  ctx.font = fontCSS(o.font, o.size);
+  ctx.textBaseline = 'middle';
+  ctx.textAlign = 'center';
+  ctx.lineJoin = 'round';
+  const place = (fn) => {
+    let s = 0;
+    chars.forEach((c, i) => {
+      const mid = s + widths[i] / 2 - total / 2;
+      s += widths[i] + gap;
+      ctx.save();
+      if (R) {
+        // Along a circle whose top (or bottom) passes through the anchor.
+        const th = mid / R, sg = Math.sign(bend);
+        ctx.translate(R * Math.sin(th), sg * R * (1 - Math.cos(th)));
+        ctx.rotate(sg * th);
+      } else ctx.translate(mid, 0);
+      fn(c);
+      ctx.restore();
+    });
+  };
+  if (o.halo) {
+    ctx.strokeStyle = HALO;
+    ctx.lineWidth = o.size * 0.16;
+    place((c) => ctx.strokeText(c, 0, 0));
+  }
+  ctx.fillStyle = o.color || '#2b2118';
+  place((c) => ctx.fillText(c, 0, 0));
+  ctx.restore();
 }
