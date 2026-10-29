@@ -48,6 +48,7 @@ export async function renderMap(project, { type = 'image/png', scale = 1 } = {})
   const ids = [...new Set(store.liveObjects(doc).filter((o) => o.kind === 'stamp').map((o) => o.asset))];
   const tex = doc.objects.style && !doc.objects.style.deleted && doc.objects.style.landTexture;
   if (tex) ids.push(tex);
+  for (const t of store.liveObjects(doc)) if (t.kind === 'terrain' && t.texture && !ids.includes(t.texture)) ids.push(t.texture);
   const pics = new Map();
   let missing = 0;
   await Promise.all(ids.map(async (id) => { const img = await images.full(id); if (img) pics.set(id, img); else missing++; }));

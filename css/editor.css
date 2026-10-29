@@ -84,15 +84,28 @@ body.editing { overflow: hidden; overscroll-behavior: none; }
 .label-form .row { display: grid; grid-template-columns: 1fr 1fr; gap: .7rem; }
 .label-form input[type="range"] { min-height: 0; padding: 0; border: 0; background: transparent; accent-color: var(--rubric); }
 
-.layers-panel {
+.side-panel {
   position: absolute; right: .6rem; bottom: calc(5.2rem + env(safe-area-inset-bottom)); width: 250px; padding-bottom: .4rem;
   background: var(--ink-2); border: 1px solid var(--rule-strong); border-radius: 8px; box-shadow: var(--shadow);
 }
-.layers-panel[hidden] { display: none; }
-.layers-panel header { display: flex; align-items: center; padding: .4rem .4rem .2rem .9rem; }
-.layers-panel header b { flex: 1; font: 600 1.3rem/1 var(--display); }
+.side-panel[hidden] { display: none; }
+.side-panel header { display: flex; align-items: center; padding: .4rem .4rem .2rem .9rem; }
+.side-panel header b { flex: 1; font: 600 1.3rem/1 var(--display); }
 .layer-row { display: flex; align-items: center; gap: .1rem; padding: .1rem .4rem .1rem .9rem; }
 .layer-row span { flex: 1; }
 .layer-row.off span { color: var(--muted); text-decoration: line-through; }
 .layer-row .icon-btn.on { color: var(--brass); }
-@media (max-width: 600px) { .layers-panel { bottom: calc(7.6rem + env(safe-area-inset-bottom)); } }
+@media (max-width: 600px) { .side-panel { bottom: calc(7.6rem + env(safe-area-inset-bottom)); } }
+
+.style-panel { width: 270px; }
+.style-body { padding: .3rem .9rem .5rem; }
+.style-body label { margin-bottom: .55rem; font-size: .88rem; }
+.style-body label.inline { justify-content: space-between; }
+.style-body input[type="color"] { width: 48px; min-height: 30px; }
+.style-body input[type="range"] { min-height: 0; padding: 0; border: 0; background: transparent; accent-color: var(--rubric); }
+.toolbar .terrain-size, .toolbar .terrain-soft { width: 80px; min-height: 0; padding: 0; flex-shrink: 0; accent-color: var(--rubric); background: transparent; border: 0; }
+@media (max-width: 600px) { .toolbar .terrain-size, .toolbar .terrain-soft { width: 60px; } }
+.path-style { flex-shrink: 0; }
+.path-style button { padding: .4em .6em; }
+.toolbar .path-width { width: 80px; min-height: 0; padding: 0; flex-shrink: 0; accent-color: var(--rubric); background: transparent; border: 0; }
+@media (max-width: 600px) { .path-style button { padding: .4em .45em; font-size: .8rem; } .toolbar .path-width { width: 60px; } }

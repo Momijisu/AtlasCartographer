@@ -46,9 +46,18 @@ export function strokePath(ctx, p, width) {
 // Stamps: library art centred on (x, y), w × h map pixels, rotated by rot
 // radians, mirrored when flip. Art that hasn't loaded yet shows as an outline
 // when placeholder is set (the editor), and not at all otherwise.
-export function drawStamp(ctx, o, img, placeholder = false) {
+export function drawStamp(ctx, o, img, placeholder = false, shadow = false) {
   if (!img && !placeholder) return;
   ctx.save();
+  if (shadow && img) {
+    // A soft shadow down and to the right, sized to the stamp. Shadows are
+    // measured in screen pixels, so scale by the current zoom.
+    const k = Math.hypot(ctx.getTransform().a, ctx.getTransform().b);
+    ctx.shadowColor = 'rgba(40, 28, 15, .45)';
+    ctx.shadowBlur = Math.min(60, o.w * 0.05 * k);
+    ctx.shadowOffsetX = o.w * 0.03 * k;
+    ctx.shadowOffsetY = o.w * 0.04 * k;
+  }
   ctx.translate(o.x, o.y);
   if (o.rot) ctx.rotate(o.rot);
   if (o.flip) ctx.scale(-1, 1);
@@ -72,11 +81,17 @@ export function drawDoc(ctx, project, doc, { image = () => null, placeholder = f
   const hidden = new Set(docStyle(doc).hidden || []);
   const objs = liveObjects(doc).sort((a, b) => (a.z || 0) - (b.z || 0));
   const land = objs.filter((o) => o.kind === 'land');
-  if (land.length && !hidden.has('land')) ctx.drawImage(landLayer(project, doc, land, landScale, image, cache), 0, 0, project.width, project.height);
+  const terrain = objs.filter((o) => o.kind === 'terrain');
+  if ((land.length || terrain.length) && !hidden.has('land')) {
+    ctx.drawImage(landLayer(project, doc, land, terrain, landScale, image, cache), 0, 0, project.width, project.height);
+  }
+  const st = mapStyle(doc);
+  const shadow = st.stampShadow;
   for (const o of objs) {
-    if (hidden.has(o.kind)) continue;
+    if (hidden.has(layerOf(o))) continue;
     if (o.kind === 'stroke') drawStroke(ctx, o);
-    else if (o.kind === 'stamp') drawStamp(ctx, o, image(o.asset), placeholder);
+    else if (o.kind === 'path') drawPath(ctx, o, st);
+    else if (o.kind === 'stamp') drawStamp(ctx, o, image(o.asset), placeholder, shadow);
   }
   // Labels go on top of everything, so art never covers a name.
   if (!hidden.has('label')) for (const o of objs) if (o.kind === 'label') drawLabel(ctx, o);
@@ -116,61 +131,126 @@ export function editorLandScale(project) {
 }
 
 // The map's layers, top to bottom; each holds one kind of object.
-export const LAYERS = [['label', 'Labels'], ['stamp', 'Stamps'], ['stroke', 'Ink'], ['land', 'Land and sea']];
+export const LAYERS = [['label', 'Labels'], ['stamp', 'Stamps'], ['stroke', 'Ink and paths'], ['land', 'Land and sea']];
+// Which layer an object is on (layers are named after their main kind).
+export const layerOf = (o) => ({ path: 'stroke', terrain: 'land' }[o.kind] || o.kind);
 
 export const docStyle = (doc) => doc?.objects?.style && !doc.objects.style.deleted ? doc.objects.style : {};
 
-function landLayer(project, doc, land, scale, image, cache) {
+// The map's look: STYLE, with whatever the map's style object overrides.
+const STYLE_KEYS = ['sea', 'coast', 'land', 'coastWidth', 'rippleCount', 'stampShadow'];
+export function mapStyle(doc) {
+  const d = docStyle(doc), st = { ...STYLE, rippleCount: STYLE.ripples.length, stampShadow: false };
+  for (const k of STYLE_KEYS) if (d[k] != null) st[k] = d[k];
+  // Rings spread evenly out to the default outermost one, however many there are.
+  const far = Math.max(...STYLE.ripples);
+  st.ripples = Array.from({ length: st.rippleCount }, (_, i) => Math.round(far * (i + 1) / st.rippleCount));
+  return st;
+}
+
+function landLayer(project, doc, land, terrain, scale, image, cache) {
   const style = docStyle(doc);
-  const tex = style.landTexture ? image(style.landTexture) : null;
-  if (!cache) return renderLand(project, land, scale, tex);
-  const sig = land.map((o) => o.id + ':' + o.updatedAt).join() + `|${project.width}x${project.height}@${scale}|${style.landTexture || ''}:${tex ? tex.naturalWidth : 0}`;
+  const st = mapStyle(doc);
+  const texIds = [...new Set([style.landTexture, ...terrain.map((t) => t.texture)].filter(Boolean))];
+  const pics = new Map(texIds.map((id) => [id, image(id)]));
+  if (!cache) return renderLand(project, land, terrain, scale, pics, style.landTexture, st);
+  const sig = [...land, ...terrain].map((o) => o.id + ':' + o.updatedAt).join()
+    + `|${project.width}x${project.height}@${scale}|${style.landTexture || ''}|`
+    + texIds.map((id) => pics.get(id)?.naturalWidth || 0).join() + '|' + JSON.stringify(st);
   // Thumbnails get their own slot, so the home page doesn't evict the editor's layer.
   const key = scale < 0.2 ? `${project.id}:thumb` : project.id;
   const hit = layers.get(key);
   if (hit && hit.sig === sig) return hit.canvas;
-  const canvas = renderLand(project, land, scale, tex);
+  const canvas = renderLand(project, land, terrain, scale, pics, style.landTexture, st);
   layers.set(key, { sig, canvas });
   return canvas;
 }
 
-function renderLand(project, land, scale, tex) {
+// A repeating fill of a library texture, textureSize map pixels a tile.
+export function texturePattern(ctx, img, st) {
+  const pat = ctx.createPattern(img, 'repeat');
+  const k = st.textureSize / Math.max(img.naturalWidth, img.naturalHeight, 1);
+  pat.setTransform(new DOMMatrix([k, 0, 0, k, 0, 0]));
+  return pat;
+}
+
+function renderLand(project, land, terrain, scale, pics, landTexture, st) {
   const w = Math.max(1, Math.round(project.width * scale)), h = Math.max(1, Math.round(project.height * scale));
   const out = makeCanvas(w, h);
   const mask = makeCanvas(w, h);
   const o = out.getContext('2d'), m = mask.getContext('2d');
-  o.fillStyle = STYLE.sea;
-  o.fillRect(0, 0, w, h);
-  // Fill the land grown by d, in a colour (or with a pattern) of its own.
-  const layer = (d, fill) => {
+  const reset = () => {
     m.globalCompositeOperation = 'source-over';
     m.setTransform(1, 0, 0, 1, 0, 0);
     m.clearRect(0, 0, w, h);
     m.setTransform(scale, 0, 0, scale, 0, 0);
     m.fillStyle = m.strokeStyle = '#000';
+  };
+  // The land grown by d, as a black mask.
+  const landMask = (d) => {
+    reset();
     for (const s of land) {
       m.globalCompositeOperation = s.mode === 'erase' ? 'destination-out' : 'source-over';
       strokePath(m, s.points, s.mode === 'erase' ? s.width - 2 * d : s.width + 2 * d);
     }
+  };
+  // Colour (or pattern) the mask and lay it on the result.
+  const paint = (fill, target = o) => {
     m.globalCompositeOperation = 'source-in';
     m.fillStyle = fill;
     m.fillRect(0, 0, project.width, project.height);
-    o.drawImage(mask, 0, 0);
+    target.drawImage(mask, 0, 0);
   };
-  for (const r of [...STYLE.ripples].sort((a, b) => b - a)) {
-    layer(r, STYLE.ripple);
-    layer(r - STYLE.rippleWidth, STYLE.sea);
+  const base = landTexture && pics.get(landTexture) ? texturePattern(m, pics.get(landTexture), st) : st.land;
+  if (land.length) {
+    o.fillStyle = st.sea;
+    o.fillRect(0, 0, w, h);
+    for (const r of [...st.ripples].sort((a, b) => b - a)) {
+      landMask(r); paint(STYLE.ripple);
+      landMask(r - STYLE.rippleWidth); paint(st.sea);
+    }
+    if (st.coastWidth > 0) { landMask(st.coastWidth); paint(st.coast); }
+    landMask(0); paint(base);
+  } else {
+    // No land painted: the paper is the land, and terrain goes anywhere.
+    o.fillStyle = PAPER;
+    o.fillRect(0, 0, w, h);
   }
-  layer(STYLE.coastWidth, STYLE.coast);
-  let fill = STYLE.land;
-  if (tex) {
-    const pat = m.createPattern(tex, 'repeat');
-    const k = STYLE.textureSize / Math.max(tex.naturalWidth, tex.naturalHeight, 1);
-    pat.setTransform(new DOMMatrix([k, 0, 0, k, 0, 0]));
-    fill = pat;
+  if (terrain.length) {
+    const t = makeCanvas(w, h), tc = t.getContext('2d');
+    // Consecutive strokes of one texture share a pass.
+    for (let i = 0; i < terrain.length;) {
+      const tex = terrain[i].texture;
+      let j = i;
+      while (j < terrain.length && terrain[j].texture === tex) j++;
+      const run = terrain.slice(i, j);
+      i = j;
+      const fill = tex ? (pics.get(tex) ? texturePattern(m, pics.get(tex), st) : null) : base;
+      if (!fill) continue; // its picture hasn't loaded yet
+      reset();
+      for (const s of run) softStroke(m, s, scale);
+      paint(fill, tc);
+    }
+    if (land.length) { landMask(0); tc.globalCompositeOperation = 'destination-in'; tc.drawImage(mask, 0, 0); }
+    o.drawImage(t, 0, 0);
   }
-  layer(0, fill);
   return out;
+}
+
+// A stroke with feathered edges: soft (0…1) blurs up to half its width.
+// The blur is a canvas shadow (it works in every browser, unlike filters):
+// the stroke itself is drawn far off to the side, so only its shadow lands.
+const FAR = 100000;
+export function softStroke(ctx, s, scale) {
+  const blur = Math.min(120, (s.soft || 0) * s.width * 0.5 * scale);
+  if (blur < 0.5) { strokePath(ctx, s.points, s.width); return; }
+  ctx.save();
+  ctx.shadowColor = '#000';
+  ctx.shadowBlur = blur;
+  ctx.shadowOffsetX = FAR;
+  ctx.translate(-FAR / scale, 0);
+  strokePath(ctx, s.points, s.width * (1 - (s.soft || 0) * 0.4));
+  ctx.restore();
 }
 
 function makeCanvas(w, h) {
@@ -258,4 +338,57 @@ export function drawLabel(ctx, o) {
   ctx.fillStyle = o.color || '#2b2118';
   place((c) => ctx.fillText(c, 0, 0));
   ctx.restore();
+}
+
+// --- paths ----------------------------------------------------------------
+//
+// Roads (dashed), trails (dotted) and borders (dash-dot) in ink; rivers in
+// the sea's colour with the coast's edge, widening from source to mouth.
+
+export const PATHS = {
+  road: ['Road', '#6b4a2b'],
+  trail: ['Trail', '#6b4a2b'],
+  river: ['River', null],
+  border: ['Border', '#8e2f22'],
+};
+
+export function drawPath(ctx, o, st = STYLE) {
+  const p = o.points, w = o.width;
+  if (!p || p.length < 4) return;
+  ctx.save();
+  ctx.lineCap = ctx.lineJoin = 'round';
+  if (o.style === 'river') {
+    // Short segments, each a little wider than the last: from a quarter of
+    // the width at the source to all of it at the mouth.
+    const n = p.length / 2 - 1;
+    const pass = (extra, colour) => {
+      ctx.strokeStyle = colour;
+      for (let i = 0; i < n; i++) {
+        ctx.lineWidth = w * (0.25 + 0.75 * (i / Math.max(1, n - 1))) + extra;
+        ctx.beginPath();
+        ctx.moveTo(p[2 * i], p[2 * i + 1]);
+        ctx.lineTo(p[2 * i + 2], p[2 * i + 3]);
+        ctx.stroke();
+      }
+    };
+    pass(Math.max(2, w * 0.35), st.coast);
+    pass(0, st.sea);
+  } else {
+    ctx.strokeStyle = ctx.fillStyle = o.color || PATHS[o.style]?.[1] || '#6b4a2b';
+    if (o.style === 'road') ctx.setLineDash([w * 3, w * 2]);
+    else if (o.style === 'trail') ctx.setLineDash([0.01, w * 2.2]);
+    else if (o.style === 'border') ctx.setLineDash([w * 4, w * 1.6, 0.01, w * 1.6]);
+    if (o.style === 'trail') ctx.lineWidth = w * 1.1;
+    smoothLine(ctx, p, o.style === 'trail' ? w * 1.1 : w);
+  }
+  ctx.restore();
+}
+
+function smoothLine(ctx, p, width) {
+  ctx.lineWidth = width;
+  ctx.beginPath();
+  ctx.moveTo(p[0], p[1]);
+  for (let i = 2; i < p.length - 2; i += 2) ctx.quadraticCurveTo(p[i], p[i + 1], (p[i] + p[i + 2]) / 2, (p[i + 1] + p[i + 3]) / 2);
+  ctx.lineTo(p[p.length - 2], p[p.length - 1]);
+  ctx.stroke();
 }
