@@ -7,6 +7,14 @@ body.editing { overflow: hidden; overscroll-behavior: none; }
 }
 .editor-canvas { display: block; width: 100%; height: 100%; touch-action: none; user-select: none; -webkit-user-select: none; }
 
+.toolrail {
+  position: absolute; left: .6rem; top: 50%; transform: translateY(-50%);
+  display: flex; flex-direction: column; gap: .2rem; padding: .3rem;
+  max-height: calc(100% - 1.2rem); overflow-y: auto;
+  background: color-mix(in srgb, var(--ink-2) 94%, transparent);
+  border: 1px solid var(--rule-strong); border-radius: 8px; box-shadow: var(--shadow);
+  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+}
 .toolbar {
   position: absolute; left: 50%; transform: translateX(-50%);
   bottom: calc(1rem + env(safe-area-inset-bottom));
@@ -32,9 +40,16 @@ body.editing { overflow: hidden; overscroll-behavior: none; }
 }
 .swatch.on { box-shadow: 0 0 0 2px var(--brass); }
 .toolbar .width { width: 96px; min-height: 0; padding: 0; flex-shrink: 0; accent-color: var(--rubric); background: transparent; border: 0; }
+/* Phones and narrow windows: the tools become a scrolling row along the
+   bottom, with the current tool's options in a row above it. */
+@media (max-width: 900px) {
+  .toolrail { top: auto; left: 50%; transform: translateX(-50%); bottom: calc(.5rem + env(safe-area-inset-bottom));
+    flex-direction: row; max-width: calc(100vw - 1rem); max-height: none; overflow-x: auto; overflow-y: hidden; }
+  .toolbar { bottom: calc(4.1rem + env(safe-area-inset-bottom)); }
+  .picker, .side-panel { bottom: calc(8.6rem + env(safe-area-inset-bottom)); }
+}
 @media (max-width: 600px) {
-  .toolbar { flex-wrap: wrap; justify-content: center; width: max-content; max-width: calc(100vw - 1rem); }
-  .toolbar .tb-sep:nth-of-type(2) { display: none; }
+  .toolbar { width: max-content; max-width: calc(100vw - 1rem); overflow-x: auto; }
   .toolbar .width { width: 72px; }
   .swatches { gap: .2rem; }
 }
@@ -69,7 +84,7 @@ body.editing { overflow: hidden; overscroll-behavior: none; }
 .pk-grid .tile { cursor: pointer; padding: 0; color: var(--muted); }
 .pk-grid .tile.on { border-color: var(--rubric); box-shadow: 0 0 0 2px var(--rubric); }
 @media (max-width: 600px) {
-  .picker { left: .5rem; right: .5rem; width: auto; top: auto; height: 52vh; bottom: calc(7.6rem + env(safe-area-inset-bottom)); }
+  .picker { left: .5rem; right: .5rem; width: auto; top: auto; height: 46vh; bottom: calc(8.6rem + env(safe-area-inset-bottom)); }
   .pk-grid { grid-template-columns: repeat(4, 1fr); }
   .toolbar .stamp-size { width: 72px; }
 }
@@ -95,7 +110,7 @@ body.editing { overflow: hidden; overscroll-behavior: none; }
 .layer-row span { flex: 1; }
 .layer-row.off span { color: var(--muted); text-decoration: line-through; }
 .layer-row .icon-btn.on { color: var(--brass); }
-@media (max-width: 600px) { .side-panel { bottom: calc(7.6rem + env(safe-area-inset-bottom)); } }
+@media (max-width: 600px) { .side-panel { left: .5rem; right: .5rem; width: auto; max-height: 50vh; overflow-y: auto; } }
 
 .style-panel { width: 270px; }
 .style-body { padding: .3rem .9rem .5rem; }
@@ -113,3 +128,8 @@ body.editing { overflow: hidden; overscroll-behavior: none; }
 .style-body select { width: auto; min-height: 30px; padding: .2em .4em; font-size: .88rem; }
 .inline-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: .55rem; font-size: .88rem; color: var(--text-2); }
 .style-panel { max-height: calc(100% - 7rem); overflow-y: auto; }
+
+/* Last, so they win over the panels' desktop widths. */
+@media (max-width: 600px) {
+  .side-panel, .style-panel { left: .5rem; right: .5rem; width: auto; max-height: 50vh; overflow-y: auto; }
+}

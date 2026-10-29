@@ -51,9 +51,10 @@ export async function viewEditor(view, id) {
   view.innerHTML = `<div class="editor">
       <canvas class="editor-canvas"></canvas>
       <aside class="picker" hidden></aside>
-      <div class="toolbar" role="toolbar" aria-label="Tools">
+      <div class="toolrail" role="toolbar" aria-label="Tools">
         ${TOOLS.map(([t, ic, title]) => `<button class="tool" data-tool="${t}" title="${title}" aria-label="${title.replace(/ \(.*/, '')}">${icon(ic)}</button>`).join('')}
-        <span class="tb-sep"></span>
+      </div>
+      <div class="toolbar" role="toolbar" aria-label="Tool options">
         <span class="tb-group" data-for="land">
           <span class="seg land-mode"><button type="button" data-landmode="add" title="Paint land (hold Alt for water)">Land</button><button type="button" data-landmode="erase" title="Paint water">Water</button></span>
           <input type="range" class="land-size" min="0" max="100" step="1" title="Brush size ([ and ])" aria-label="Land brush size">
@@ -784,8 +785,7 @@ class Editor {
   // --- input ------------------------------------------------------------
 
   wire() {
-    const tb = $('.toolbar', this.root);
-    tb.onclick = (e) => {
+    const onBar = (e) => {
       const b = e.target.closest('button');
       if (!b || b.disabled) return;
       if (b.dataset.tool) this.setTool(b.dataset.tool);
@@ -809,6 +809,8 @@ class Editor {
       else if (act === 'adjust') this.togglePanel('.adjust-panel', () => this.renderAdjust());
       else if (act === 'terrain-picker') this.togglePicker('terrain');
     };
+    $('.toolbar', this.root).onclick = onBar;
+    $('.toolrail', this.root).onclick = onBar;
     $('.width', this.root).oninput = (e) => { this.width = +e.target.value; keep('ac.width', this.width); };
     $('.stamp-size', this.root).oninput = (e) => { this.stampSize = sizeFromSlider(+e.target.value); keep('ac.stampSize', this.stampSize); };
     $('.land-size', this.root).oninput = (e) => { this.landSize = sizeFromSlider(+e.target.value); keep('ac.landSize', this.landSize); };
