@@ -278,3 +278,7 @@ details.cat[open] .cat-name .caret { transform: rotate(90deg); }
   .asset-grid { grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)); }
 }
 @media (max-width: 600px) { .hide-phone { display: none; } }
+
+.about-list { display: grid; grid-template-columns: auto 1fr; gap: .4rem 1.2rem; margin: 0 0 1rem; }
+.about-list dt { font: 500 .74rem/1.9 var(--sans); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+.about-list dd { margin: 0; }

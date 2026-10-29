@@ -42,7 +42,20 @@ export function viewSettings(view) {
       </div>
       <p class="muted small">Full draws coastlines at the map’s own resolution, sharp at any zoom; Standard uses far less memory. Automatic picks Standard on phones and tablets and Full elsewhere. Exports are always full.</p>
     </div>
-    <p class="muted small center">AtlasCartographer ${esc(self.AC_VERSION)} · ${esc(self.AC_BUILD)}</p>
+    <div class="panel" id="aboutCard">
+      <h2>About this app</h2>
+      <dl class="about-list">
+        <dt>Version</dt><dd><b>${esc(self.AC_VERSION || '?')}</b> <span class="muted">· built ${esc(self.AC_BUILD || '?')}</span></dd>
+        <dt>Offline cache</dt><dd id="cacheVer" class="muted">checking…</dd>
+        <dt>Latest online</dt><dd id="latestVer" class="muted">—</dd>
+      </dl>
+      <div class="actions left">
+        <button class="btn" id="checkUpd">${icon('arrows-clockwise')} Check for updates</button>
+        <button class="btn primary" id="doUpd" hidden>${icon('download-simple')} Update now</button>
+        <button class="btn quiet" id="resetCache" title="Clears downloaded app files only. Your maps and art are not affected.">Reset offline cache</button>
+      </div>
+      <p class="muted small">Resetting the cache re-downloads the app. Your maps, art and settings aren’t touched.</p>
+    </div>
   </div>`;
   renderOneDriveCard();
   const seg = $('#themeSeg');
@@ -64,6 +77,58 @@ export function viewSettings(view) {
   };
   markD();
   $('#installBtn')?.addEventListener('click', () => state.promptInstall().then(() => state.route()));
+  wireAbout();
+}
+
+// Version, offline cache and updates (as in WorldAtlas).
+function wireAbout() {
+  const running = self.AC_VERSION;
+  const cacheEl = $('#cacheVer');
+  const showCache = async (retry) => {
+    try {
+      const keys = (await caches.keys()).filter((k) => k.startsWith('cartographer-'));
+      const cached = keys.map((k) => k.slice('cartographer-'.length));
+      cacheEl.textContent = !keys.length ? 'downloading for offline use…'
+        : cached.includes(running) ? `${running} · matches` : `${cached.join(', ')} · updating to ${running}…`;
+      // On a first visit the cache is still being filled; look again once it's ready.
+      if (retry && (!keys.length || !cached.includes(running))) {
+        navigator.serviceWorker?.ready.then(() => setTimeout(() => { if (cacheEl.isConnected) showCache(false); }, 1500));
+      }
+    } catch { cacheEl.textContent = 'unavailable in this browser'; }
+  };
+  showCache(true);
+  const latestEl = $('#latestVer');
+  const check = async () => {
+    latestEl.textContent = 'checking…';
+    try {
+      const text = await (await fetch(`js/version.js?check=${Date.now()}`, { cache: 'no-store' })).text();
+      const latest = text.match(/AC_VERSION\s*=\s*'([^']+)'/)?.[1];
+      if (!latest) throw new Error('unreadable');
+      const behind = latest !== running;
+      latestEl.innerHTML = behind ? `<b class="warn">${esc(latest)}</b> · an update is available` : `${esc(latest)} · you’re up to date`;
+      $('#doUpd').hidden = !behind;
+    } catch {
+      latestEl.textContent = navigator.onLine ? 'couldn’t check right now' : 'offline: connect to check';
+    }
+  };
+  $('#checkUpd').onclick = check;
+  $('#doUpd').onclick = async () => {
+    $('#doUpd').disabled = true;
+    $('#doUpd').textContent = 'Updating…';
+    const reg = await navigator.serviceWorker?.getRegistration();
+    await reg?.update().catch(() => {});
+    // The new version takes over and the page reloads itself; reload anyway if that takes too long.
+    setTimeout(() => location.reload(), 6000);
+  };
+  $('#resetCache').onclick = async () => {
+    if (!(await confirmDialog('Clear the app’s downloaded files and reload? Your maps, art and settings stay.', 'Reset and reload', { title: 'Reset offline cache', danger: false }))) return;
+    try {
+      for (const k of await caches.keys()) if (k.startsWith('cartographer-')) await caches.delete(k);
+      for (const r of (await navigator.serviceWorker?.getRegistrations()) || []) if (r.scope === new URL('./', location.href).href) await r.unregister();
+    } catch { /* ignore */ }
+    location.reload();
+  };
+  if (navigator.onLine) check();
 }
 
 export function renderOneDriveCard() {
@@ -101,7 +166,7 @@ export function renderOneDriveCard() {
     if (!(await confirmDialog('Disconnect OneDrive on this device? Your maps stay here and in OneDrive.', 'Disconnect'))) return;
     auth.signOut();
     // Next time, merge with whatever OneDrive holds from scratch.
-    await store.saveMeta({ eTags: {}, folders: 0 });
+    await store.saveMeta({ eTags: {} });
     sync.refreshStatus();
   });
   $('#saveCid')?.addEventListener('click', () => {

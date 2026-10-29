@@ -19,7 +19,6 @@ const APPROOT = '/me/drive/special/approot';
 const ROOT = `${APPROOT}:`; // + '/path/in/the/app/folder'
 const INDEX = 'projects.json';
 const CATALOGUE = 'assets.json';
-const FOLDERS = ['projects', 'assets', 'thumbs'];
 const docPath = (id) => `projects/${id}.json`;
 
 let status = { state: 'off', message: '' };
@@ -56,7 +55,6 @@ async function run() {
   if (!navigator.onLine) return setStatus('offline', 'Offline. Changes are saved on this device.');
   setStatus('syncing');
   try {
-    await ensureFolders();
     await retry(INDEX, syncIndex);
     await retry(CATALOGUE, syncCatalogue);
     const remote = await listDocs();
@@ -65,7 +63,9 @@ async function run() {
       else {
         // The listing's eTag saves a request on the first try; after a race,
         // read the file afresh.
-        let listed = remote.get(docPath(p.id)) ?? null;
+        // A map this device doesn't have yet is looked up directly rather
+        // than trusting the listing, so it's never missed.
+        let listed = remote.get(docPath(p.id)) ?? (await store.hasDoc(p.id) ? null : undefined);
         await retry(p.name || p.id, () => { const e = listed; listed = undefined; return syncDoc(p.id, e); });
       }
     }
@@ -96,22 +96,6 @@ async function check(res, what) {
   const err = new Error(msg);
   err.status = res.status;
   throw err;
-}
-
-// Create the app's folders once per device (again when a version adds one).
-// 409 means a folder already exists, which is fine; nothing here ever
-// replaces a folder.
-async function ensureFolders() {
-  if (store.meta.folders === FOLDERS.length) return;
-  for (const name of FOLDERS) {
-    const res = await auth.graph(`${APPROOT}/children`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, folder: {}, '@microsoft.graph.conflictBehavior': 'fail' }),
-    });
-    if (res.status !== 409) await check(res, 'Creating the OneDrive folder');
-  }
-  await store.saveMeta({ folders: FOLDERS.length });
 }
 
 // Download, merge and (if this device is ahead) upload one JSON file.
