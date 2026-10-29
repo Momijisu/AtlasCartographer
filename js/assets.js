@@ -117,6 +117,8 @@ export async function pictureURL(store, id) {
   return url;
 }
 export const thumbURL = (id) => pictureURL('thumbs', id);
+// The thumbnail's URL if it's already been loaded (so it can be drawn at once).
+export const cachedThumbURL = (id) => urls.get(`thumbs:${id}`) || null;
 
 export const getBlob = async (id) => (await db.get('blobs', id))?.blob || null;
 export const getThumb = async (id) => (await db.get('thumbs', id))?.blob || null;

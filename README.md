@@ -29,19 +29,28 @@ Planned:
 
 ## Editor shortcuts
 
-| Key | | Key | |
-|---|---|---|---|
-| H / Space | move the view | V | select |
-| L | land and water | Alt (while painting) | the other one |
-| G | terrain | P | paths |
-| T | text | Enter | edit the selected label |
-| B | ink pen | E | eraser |
-| S | stamp | R | scatter |
-| [ ] | smaller / larger (or send back / bring forward) | F | flip |
-| Del | delete | 0 | fit the map |
-| Ctrl+Z | undo | Ctrl+Shift+Z | redo |
-| Ctrl+A | select all | Ctrl+D | duplicate |
-| Ctrl+C / X / V | copy, cut, paste | Esc | clear the selection |
+Press **?** in the editor for this list.
+
+| Key | |
+|---|---|
+| H, or hold Space | move the view |
+| V / L / G / P / T | select / land and water / terrain / paths / text |
+| B / E / S / R | pen and colour brush / eraser / stamp / scatter |
+| [ ] | smaller / larger brush or stamp (with a selection: send back / bring forward) |
+| Alt (while painting land) | land ↔ water |
+| Shift (while rotating) | turn in 15° steps |
+| Ctrl / Cmd click a picture | pick several stamps to place at random |
+| Drag on empty map, Shift-click | select several |
+| Arrows (Shift: ×10) | nudge the selection |
+| F | flip |
+| Enter, or double-click | edit a label |
+| Alt-click, or double-click a point | remove a path point |
+| Del | delete |
+| Esc | cancel what's half done, then clear the selection |
+| Ctrl Z / Ctrl Shift Z (or Y) | undo / redo |
+| Ctrl C / X / V | copy, cut, paste (also between maps) |
+| Ctrl D / Ctrl A | duplicate / select all |
+| 0, + − or the wheel | fit the map, zoom |
 
 ## Art assets
 

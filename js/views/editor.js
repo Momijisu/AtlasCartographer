@@ -97,6 +97,7 @@ export async function viewEditor(view, id) {
         <button class="tool" data-act="fit" title="Fit the map (0)" aria-label="Fit the map">${icon('corners-out')}</button>
         <button class="tool" data-act="style" title="Map style" aria-label="Map style">${icon('sparkle')}</button>
         <button class="tool" data-act="layers" title="Layers" aria-label="Layers">${icon('stack')}</button>
+        <button class="tool" data-act="shortcuts" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">${icon('info')}</button>
       </div>
       <div class="layers-panel side-panel" hidden></div>
       <div class="style-panel side-panel" hidden></div>
@@ -270,6 +271,62 @@ class Editor {
       ctx.strokeRect(Math.min(ax, bx), Math.min(ay, by), Math.abs(bx - ax), Math.abs(by - ay));
       ctx.setLineDash([]);
     }
+    this.paintBrushPreview();
+  }
+
+  // What the current brush will paint, at its size: under the mouse, and for
+  // a moment in the middle of the view while its size is being changed (so it
+  // shows on touch screens too).
+  paintBrushPreview() {
+    const g = this.gesture;
+    if (g?.kind === 'pinch' || g?.kind === 'pan' || this.spaceDown) return;
+    const flashing = performance.now() - (this.sizeFlash || 0) < 900;
+    const at = flashing && !this.hover ? this.toMap(this.vw / 2, this.vh / 2) : this.hover;
+    if (!at) return;
+    const tool = this.tool;
+    const size = { pen: this.width, eraser: Math.max(this.width, 12 / this.s), land: this.landSize, terrain: this.terrainSize, path: this.pathWidth, stamp: this.stampSize, scatter: this.stampSize }[tool];
+    if (!size) return;
+    const { ctx, dpr } = this;
+    const [mx, my] = at;
+    ctx.save();
+    ctx.setTransform(this.s * dpr, 0, 0, this.s * dpr, this.x * dpr, this.y * dpr);
+    if (tool === 'stamp' || tool === 'scatter') {
+      // A ghost of the stamp (the first of the chosen pictures), at size.
+      const a = this.brush.map((id) => A.asset(id)).find(Boolean);
+      const img = a && images.get(a.id);
+      if (img) {
+        const k = size / Math.max(a.w, a.h, 1);
+        ctx.globalAlpha = 0.55;
+        ctx.drawImage(img, mx - (a.w * k) / 2, my - (a.h * k) / 2, a.w * k, a.h * k);
+        ctx.globalAlpha = 1;
+      }
+      if (tool === 'scatter') ring(ctx, mx, my, size * this.scatter.spread + size / 2, this.s, true);
+      else if (!img) ring(ctx, mx, my, size / 2, this.s);
+    } else {
+      // Inside the ring, a faint taste of what it paints.
+      ctx.beginPath();
+      ctx.arc(mx, my, size / 2, 0, Math.PI * 2);
+      const st = mapStyle(this.doc);
+      if (tool === 'pen') { ctx.globalAlpha = 0.35 * this.penOpacity; ctx.fillStyle = this.ink; ctx.fill(); }
+      else if (tool === 'land') { ctx.globalAlpha = 0.45; ctx.fillStyle = this.landMode === 'erase' ? st.sea : st.land; ctx.fill(); }
+      else if (tool === 'terrain') {
+        const img = this.terrainTex && images.get(this.terrainTex);
+        ctx.globalAlpha = 0.6 * this.terrainOpacity;
+        ctx.fillStyle = img ? texturePattern(ctx, img, STYLE) : st.land;
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+      ring(ctx, mx, my, size / 2, this.s);
+    }
+    ctx.restore();
+  }
+
+  // A size was just changed: show it, then let the preview fade with time.
+  flashSize() {
+    this.sizeFlash = performance.now();
+    this.redraw();
+    clearTimeout(this.flashTimer);
+    this.flashTimer = setTimeout(() => this.redraw(), 950);
   }
 
   // A path (or text on a path): its points, to drag, and a small "+" between
@@ -878,122 +935,184 @@ class Editor {
     };
   }
 
-  // The art picker: a pack and a category of stamps, as a grid. A tap uses
-  // that picture; with "Pick several", taps add and remove pictures, and the
-  // stamp and scatter tools choose among them at random.
+  // The art picker, laid out like the library: each pack a section, each
+  // category a header with a strip of previews that opens into its full grid;
+  // recently used art first; a search shows its matches grouped the same way.
+  // A click uses that picture; Ctrl (or Cmd) click, or "Pick several", adds
+  // and removes pictures, and the stamp and scatter tools choose among them.
   renderPicker() {
     const el = $('.picker', this.root);
     if (!el || el.hidden) return;
     // Modes: 'stamp' (the stamp brush), 'texture' (the land's base fill),
-    // 'terrain' (the texture the terrain tool paints).
+    // 'terrain' (the texture the terrain tool paints), 'overlay' (paper).
     const mode = this.pickerMode;
     const tex = mode !== 'stamp';
+    const kind = tex ? 'texture' : 'stamp';
     const title = { stamp: 'Stamps', texture: 'Land texture', terrain: 'Terrain', overlay: 'Paper' }[mode];
     const plainLabel = { terrain: 'Base land', overlay: 'No paper' }[mode] || 'Plain land';
-    const pick = (id) => {
-      if (mode === 'terrain') this.setTerrainTex(id);
-      else if (mode === 'overlay') this.setStyle({ overlay: id });
-      else this.setLandTexture(id);
-    };
-    const plain = () => pick(null);
-    const packs = A.packs().map((p) => ({ ...p, categories: p.categories.filter((c) => c.kind === (tex ? 'texture' : 'stamp')) })).filter((p) => p.categories.length);
+    const packs = A.packs().map((p) => ({ ...p, categories: p.categories.filter((c) => c.kind === kind) })).filter((p) => p.categories.length);
+    const closeBtn = `<button class="icon-btn" data-close aria-label="Close">${icon('x')}</button>`;
     if (!packs.length) {
-      el.innerHTML = `<header><b>${title}</b><button class="icon-btn" data-close aria-label="Close">${icon('x')}</button></header>
+      el.innerHTML = `<header><b>${title}</b>${closeBtn}</header>
         <p class="muted pad">No ${tex ? 'textures' : 'stamps'} yet. Import art in the <a href="#/library">Art library</a>${tex ? ', and mark a category as Textures there' : ''}.</p>
         ${tex ? `<div class="pk-actions"><button class="btn small" data-plain>${plainLabel}</button></div>` : ''}`;
-      $('[data-plain]', el)?.addEventListener('click', plain);
-      $('[data-close]', el).onclick = () => { el.hidden = true; };
+      this.wirePicker(el, mode);
       return;
     }
     // This kind of map's own packs first, then packs for any map, then the rest.
     const mt = this.project.type || 'any';
     const rank = (p) => (p.type === mt && mt !== 'any' ? 0 : p.type === 'any' ? 1 : 2);
     packs.sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
-    const kp = `ac.pickPack.${tex ? 'texture' : 'stamp'}.${mt}`, kc = `ac.pickCat.${tex ? 'texture' : 'stamp'}.${mt}`;
-    // What to show: a search across every pack, art used recently, or one
-    // pack's category.
-    const kind = tex ? 'texture' : 'stamp';
-    const query = (this.pickQuery || '').trim().toLowerCase();
-    const recentMode = load(kp, '') === RECENT;
-    const pack = recentMode ? null : packs.find((p) => p.name === load(kp, '')) || packs[0];
-    const cat = pack && (pack.categories.find((c) => c.name === load(kc, '')) || pack.categories[0]);
     const order = new Map(packs.map((p, i) => [p.name, i]));
-    let list;
+    const byName = (a, b) => a.name.localeCompare(b.name, undefined, { numeric: true });
+    const open = this.pickOpen(kind);
+    const query = (this.pickQuery || '').trim().toLowerCase();
+    const tile = (a, cls = '') => {
+      const url = A.cachedThumbURL(a.id);
+      return `<button class="tile${cls}" data-id="${a.id}" title="${esc(a.name)}">${url ? `<img src="${url}" alt="" draggable="false">` : icon('image')}</button>`;
+    };
+    const grid = (list) => `<div class="pk-grid">${list.map((a) => tile(a)).join('')}</div>`;
+    const catHead = (key, label, count, isOpen, all = true) => `<div class="pk-cat-head" data-toggle="${esc(key)}">
+        <span class="pk-caret">${icon(isOpen ? 'caret-down' : 'caret-right')}</span><span class="pk-cat-name">${esc(label)}</span><span class="muted small">${count}</span>
+        ${all && !tex ? `<button class="btn small quiet" data-all="${esc(key)}" title="Stamp with any of these">Use all</button>` : ''}</div>`;
+    let body = '';
+    this.pickLists = new Map(); // section key → its assets, for "Use all"
     if (query) {
       const words = query.split(/\s+/);
-      list = A.liveAssets().filter((a) => a.kind === kind && order.has(a.pack)
+      const hits = A.liveAssets().filter((a) => a.kind === kind && order.has(a.pack)
         && words.every((w) => `${a.name} ${a.category} ${a.pack}`.toLowerCase().includes(w)))
-        .sort((a, b) => order.get(a.pack) - order.get(b.pack) || a.name.localeCompare(b.name, undefined, { numeric: true }))
-        .slice(0, 300);
-    } else if (recentMode) {
-      list = recent(kind).map((id) => A.asset(id)).filter((a) => a && a.kind === kind);
+        .sort((a, b) => order.get(a.pack) - order.get(b.pack) || a.category.localeCompare(b.category) || byName(a, b)).slice(0, 300);
+      const groups = new Map();
+      for (const a of hits) {
+        const key = `${a.pack}${SEP}${a.category}`;
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(a);
+      }
+      body = `<p class="muted small pk-found">${hits.length === 300 ? 'First 300 matches' : `${hits.length} ${hits.length === 1 ? 'match' : 'matches'}`}</p>`
+        + [...groups].map(([key, list]) => { this.pickLists.set(key, list); const [pk, ct] = key.split(SEP); return `<section class="pk-section">${catHead(key, `${pk} · ${ct || 'General'}`, list.length, true)}${grid(list)}</section>`; }).join('');
     } else {
-      list = A.liveAssets().filter((a) => a.pack === pack.name && a.category === cat.name)
-        .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+      const rec = recent(kind).map((id) => A.asset(id)).filter((a) => a && a.kind === kind).slice(0, 24);
+      if (rec.length) {
+        this.pickLists.set(RECENT, rec);
+        const isOpen = !open.has(`${RECENT}:closed`);
+        body += `<section class="pk-section">${catHead(RECENT, 'Recently used', rec.length, isOpen)}${isOpen ? grid(rec) : ''}</section>`;
+      }
+      for (const p of packs) {
+        const packOpen = !open.has(`${p.name}:closed`);
+        body += `<section class="pk-pack-section"><div class="pk-pack-head" data-toggle="${esc(p.name)}:closed">
+            <span class="pk-caret">${icon(packOpen ? 'caret-down' : 'caret-right')}</span><b>${esc(p.name)}</b>
+            ${rank(p) === 2 ? `<span class="muted small">${esc(A.PACK_TYPES.find(([v]) => v === p.type)?.[1] || '')}</span>` : ''}</div>`;
+        if (packOpen) {
+          for (const c of p.categories) {
+            const key = `${p.name}${SEP}${c.name}`;
+            const list = A.liveAssets().filter((a) => a.pack === p.name && a.category === c.name).sort(byName);
+            this.pickLists.set(key, list);
+            const isOpen = open.has(key);
+            // Closed, a category shows a strip of its first pictures.
+            body += `<section class="pk-section">${catHead(key, c.name || 'General', list.length, isOpen)}
+              ${isOpen ? grid(list) : `<div class="pk-strip">${list.slice(0, 6).map((a) => tile(a, ' mini')).join('')}${list.length > 6 ? `<button class="pk-more" data-toggle="${esc(key)}">+${list.length - 6}</button>` : ''}</div>`}</section>`;
+          }
+        }
+        body += '</section>';
+      }
     }
-    const chosen = new Set(mode === 'texture' ? [docStyle(this.doc).landTexture] : mode === 'terrain' ? [this.terrainTex] : mode === 'overlay' ? [docStyle(this.doc).overlay] : this.brush);
+    const scroll = $('.pk-browse', el)?.scrollTop || 0;
     el.innerHTML = `<header><b>${title}</b>
-        ${tex ? '' : `<label class="check small"><input type="checkbox" class="pk-multi" ${this.multi ? 'checked' : ''}> Pick several</label>`}
-        <button class="icon-btn" data-close aria-label="Close">${icon('x')}</button></header>
-      <div class="pk-filters">
-        <input type="search" class="pk-search" placeholder="Search all art…" value="${esc(this.pickQuery || '')}" aria-label="Search art">
-        ${query ? `<p class="muted small pk-found">${list.length === 300 ? 'First 300 matches' : `${list.length} ${list.length === 1 ? 'match' : 'matches'}`}</p>` : `
-        <select class="pk-pack" aria-label="Pack"><option value="${RECENT}" ${recentMode ? 'selected' : ''}>Recently used</option>${packs.map((p) => `<option value="${esc(p.name)}" ${p === pack ? 'selected' : ''}>${esc(p.name)}${rank(p) === 2 ? ` (${esc(A.PACK_TYPES.find(([v]) => v === p.type)?.[1] || '')})` : ''}</option>`).join('')}</select>
-        ${recentMode ? '' : `<select class="pk-cat" aria-label="Category">${pack.categories.map((c) => `<option value="${esc(c.name)}" ${c === cat ? 'selected' : ''}>${esc(c.name || 'General')} (${c.count})</option>`).join('')}</select>`}`}
-      </div>
-      <div class="pk-actions">${tex ? `<button class="btn small${mode === 'terrain' && !this.terrainTex ? ' on' : ''}" data-plain>${plainLabel}</button>`
-        : `<button class="btn small" data-all>Use all ${list.length}</button><span class="muted small">${this.brush.length} chosen</span>`}</div>
-      <div class="pk-grid">${list.length ? list.map((a) => `<button class="tile${chosen.has(a.id) ? ' on' : ''}" data-id="${a.id}" title="${esc(a.name)}${query || recentMode ? ` · ${esc(a.pack)} / ${esc(a.category || 'General')}` : ''}">${icon('image')}</button>`).join('')
-        : `<p class="muted small">${query ? 'Nothing matches.' : 'Nothing used yet.'}</p>`}</div>`;
+        ${tex ? '' : `<label class="check small" title="Or hold Ctrl (Cmd on a Mac) while clicking"><input type="checkbox" class="pk-multi" ${this.multi ? 'checked' : ''}> Pick several</label>`}
+        ${closeBtn}</header>
+      <div class="pk-filters"><input type="search" class="pk-search" placeholder="Search all art…" value="${esc(this.pickQuery || '')}" aria-label="Search art"></div>
+      <div class="pk-actions">${tex ? `<button class="btn small" data-plain>${plainLabel}</button>`
+        : `<span class="muted small pk-count"></span><button class="btn small quiet" data-clear>Clear</button>`}</div>
+      <div class="pk-browse">${body || '<p class="muted small pad">Nothing matches.</p>'}</div>`;
+    $('.pk-browse', el).scrollTop = scroll;
+    this.wirePicker(el, mode);
+    this.markPicker();
+  }
+
+  // Which sections are open (or, for packs and recents, closed), per device.
+  pickOpen(kind) {
+    this.pickOpenSets ??= {};
+    return (this.pickOpenSets[kind] ??= new Set(load(`ac.pickOpen.${kind}`, [])));
+  }
+
+  // Show what's chosen, without redrawing the picker (no flicker).
+  markPicker() {
+    const el = $('.picker', this.root);
+    if (!el || el.hidden) return;
+    const mode = this.pickerMode;
+    const chosen = new Set(mode === 'texture' ? [docStyle(this.doc).landTexture] : mode === 'terrain' ? [this.terrainTex] : mode === 'overlay' ? [docStyle(this.doc).overlay] : this.brush);
+    for (const t of $$('.tile', el)) t.classList.toggle('on', chosen.has(t.dataset.id));
+    const count = $('.pk-count', el);
+    if (count) count.textContent = this.brush.length ? `${this.brush.length} chosen${this.brush.length > 1 ? ', placed at random' : ''}` : 'Click a picture to use it';
+    $('[data-plain]', el)?.classList.toggle('on', mode === 'terrain' && !this.terrainTex);
+  }
+
+  wirePicker(el, mode) {
+    const tex = mode !== 'stamp', kind = tex ? 'texture' : 'stamp';
+    const pick = (id) => {
+      if (mode === 'terrain') this.setTerrainTex(id);
+      else if (mode === 'overlay') this.setStyle({ overlay: id });
+      else this.setLandTexture(id);
+    };
     $('[data-close]', el).onclick = () => { el.hidden = true; };
     $('.pk-multi', el)?.addEventListener('change', (e) => { this.multi = e.target.checked; keep('ac.multi', this.multi); });
-    $('.pk-pack', el)?.addEventListener('change', (e) => { keep(kp, e.target.value); keep(kc, ''); this.renderPicker(); });
-    $('.pk-cat', el)?.addEventListener('change', (e) => { keep(kc, e.target.value); this.renderPicker(); });
+    $('[data-plain]', el)?.addEventListener('click', () => { pick(null); this.markPicker(); });
+    $('[data-clear]', el)?.addEventListener('click', () => this.setBrush([]));
     const search = $('.pk-search', el);
-    let typing;
-    search.oninput = () => {
-      clearTimeout(typing);
-      typing = setTimeout(() => {
-        const at = search.selectionStart;
-        this.pickQuery = search.value;
-        this.renderPicker();
-        // Keep typing where you were.
-        const again = $('.pk-search', el);
-        again.focus();
-        again.setSelectionRange(at, at);
-      }, 180);
-    };
-    $('[data-all]', el)?.addEventListener('click', () => this.setBrush(list.map((a) => a.id)));
-    $('[data-plain]', el)?.addEventListener('click', () => { plain(); this.renderPicker(); });
-    $('.pk-grid', el).onclick = (e) => {
+    if (search) {
+      let typing;
+      search.oninput = () => {
+        clearTimeout(typing);
+        typing = setTimeout(() => {
+          const at = search.selectionStart;
+          this.pickQuery = search.value;
+          this.renderPicker();
+          // Keep typing where you were.
+          const again = $('.pk-search', el);
+          again.focus();
+          again.setSelectionRange(at, at);
+        }, 180);
+      };
+    }
+    $('.pk-browse', el)?.addEventListener('click', (e) => {
+      const all = e.target.closest('[data-all]');
+      if (all) { e.stopPropagation(); this.setBrush((this.pickLists.get(all.dataset.all) || []).map((a) => a.id)); return; }
       const t = e.target.closest('.tile');
-      if (!t) return;
-      const id = t.dataset.id;
-      if (tex) {
-        pick(id);
-        useRecent('texture', [id]);
-        for (const x of $$('.tile', el)) x.classList.toggle('on', x === t);
+      if (t) {
+        const id = t.dataset.id;
+        if (tex) { pick(id); useRecent('texture', [id]); this.markPicker(); return; }
+        // Ctrl / Cmd click (or "Pick several") adds or removes; a plain click picks just this one.
+        const add = this.multi || e.ctrlKey || e.metaKey;
+        if (add) this.setBrush(this.brush.includes(id) ? this.brush.filter((x) => x !== id) : [...this.brush, id]);
+        else this.setBrush([id]);
+        if (this.tool !== 'stamp' && this.tool !== 'scatter') this.setTool('stamp');
+        // On small screens the picker covers the map: close it after a single pick.
+        if (!add && matchMedia('(max-width: 600px)').matches) el.hidden = true;
         return;
       }
-      if (this.multi) this.setBrush(chosen.has(id) ? this.brush.filter((x) => x !== id) : [...this.brush, id]);
-      else this.setBrush([id]);
-      if (this.tool !== 'stamp' && this.tool !== 'scatter') this.setTool('stamp');
-      // On small screens the picker covers the map: close it after a single pick.
-      if (!this.multi && matchMedia('(max-width: 600px)').matches) el.hidden = true;
-    };
+      const head = e.target.closest('[data-toggle]');
+      if (head) {
+        const key = head.dataset.toggle, open = this.pickOpen(kind);
+        const k = key === RECENT ? `${RECENT}:closed` : key;
+        if (open.has(k)) open.delete(k); else open.add(k);
+        keep(`ac.pickOpen.${kind}`, [...open]);
+        this.renderPicker();
+      }
+    });
+    // Thumbnails not loaded yet arrive as they scroll into view.
     const io = new IntersectionObserver((entries) => {
       for (const en of entries) if (en.isIntersecting) {
         io.unobserve(en.target);
         A.thumbURL(en.target.dataset.id).then((url) => { if (url) en.target.innerHTML = `<img src="${url}" alt="" draggable="false">`; });
       }
-    }, { root: el, rootMargin: '200px' });
-    for (const t of $$('.tile', el)) io.observe(t);
+    }, { root: el, rootMargin: '300px' });
+    for (const t of $$('.tile:not(:has(img))', el)) io.observe(t);
   }
 
   setBrush(ids) {
     this.brush = ids;
     keep('ac.brush', ids);
-    this.renderPicker();
+    this.markPicker();
     this.syncToolbar();
   }
 
@@ -1051,6 +1170,7 @@ class Editor {
       else if (act === 'duplicate') this.duplicateSelected();
       else if (act === 'delete') this.deleteSelected();
       else if (act === 'edit-text') this.editLabel(this.selectedObj());
+      else if (act === 'shortcuts') showShortcuts();
       else if (act === 'layers') this.togglePanel('.layers-panel', () => this.renderLayers());
       else if (act === 'style') this.togglePanel('.style-panel', () => this.renderStylePanel());
       else if (act === 'adjust') this.togglePanel('.adjust-panel', () => this.renderAdjust());
@@ -1059,14 +1179,14 @@ class Editor {
     };
     $('.toolbar', this.root).onclick = onBar;
     $('.toolrail', this.root).onclick = onBar;
-    $('.width', this.root).oninput = (e) => { this.width = penWidth(+e.target.value); keep('ac.width', this.width); };
+    $('.width', this.root).oninput = (e) => { this.flashSize(); this.width = penWidth(+e.target.value); keep('ac.width', this.width); };
     $('.pen-opacity', this.root).oninput = (e) => { this.penOpacity = +e.target.value / 100; keep('ac.penOpacity', this.penOpacity); };
     $('.pen-soft', this.root).oninput = (e) => { this.penSoft = +e.target.value / 100; keep('ac.penSoft', this.penSoft); };
     $('.ink-custom', this.root).oninput = (e) => { this.ink = e.target.value; keep('ac.ink', this.ink); this.syncToolbar(); };
-    $('.stamp-size', this.root).oninput = (e) => { this.stampSize = sizeFromSlider(+e.target.value); keep('ac.stampSize', this.stampSize); };
-    $('.land-size', this.root).oninput = (e) => { this.landSize = sizeFromSlider(+e.target.value); keep('ac.landSize', this.landSize); };
-    $('.path-width', this.root).oninput = (e) => { this.pathWidth = +e.target.value; keep('ac.pathWidth', this.pathWidth); };
-    $('.terrain-size', this.root).oninput = (e) => { this.terrainSize = sizeFromSlider(+e.target.value); keep('ac.terrainSize', this.terrainSize); };
+    $('.stamp-size', this.root).oninput = (e) => { this.flashSize(); this.stampSize = sizeFromSlider(+e.target.value); keep('ac.stampSize', this.stampSize); };
+    $('.land-size', this.root).oninput = (e) => { this.flashSize(); this.landSize = sizeFromSlider(+e.target.value); keep('ac.landSize', this.landSize); };
+    $('.path-width', this.root).oninput = (e) => { this.flashSize(); this.pathWidth = +e.target.value; keep('ac.pathWidth', this.pathWidth); };
+    $('.terrain-size', this.root).oninput = (e) => { this.flashSize(); this.terrainSize = sizeFromSlider(+e.target.value); keep('ac.terrainSize', this.terrainSize); };
     $('.terrain-soft', this.root).oninput = (e) => { this.terrainSoft = +e.target.value / 100; keep('ac.terrainSoft', this.terrainSoft); };
     $('.terrain-opacity', this.root).oninput = (e) => { this.terrainOpacity = +e.target.value / 100; keep('ac.terrainOpacity', this.terrainOpacity); };
     this.syncToolbar();
@@ -1077,7 +1197,12 @@ class Editor {
     this.disposers.push(() => this.ro.disconnect());
 
     this.on(c, 'pointerdown', (e) => this.down(e));
-    this.on(c, 'pointermove', (e) => this.move(e));
+    this.on(c, 'pointermove', (e) => {
+      // The mouse's position, for the brush preview (touch has no hover).
+      if (e.pointerType === 'mouse') { this.hover = this.toMap(...this.local(e)); if (!this.pointers.size) this.redraw(); }
+      this.move(e);
+    });
+    this.on(c, 'pointerleave', () => { this.hover = null; this.redraw(); });
     this.on(c, 'pointerup', (e) => this.up(e));
     this.on(c, 'pointercancel', (e) => this.up(e, true));
     this.on(c, 'contextmenu', (e) => e.preventDefault());
@@ -1116,11 +1241,31 @@ class Editor {
     if (mod && k === 'v') { if (clipboard?.length) { e.preventDefault(); this.paste(); } return; }
     if (mod && k === 'd') { e.preventDefault(); this.duplicateSelected(); return; }
     if (mod && k === 'a') { e.preventDefault(); this.select(this.selectable().map((o) => o.id)); if (this.tool !== 'select') this.setTool('select'); this.syncToolbar(); this.redraw(); return; }
+    // Everything saves as you go; don't let the browser offer to save the page.
+    if (mod && k === 's') { e.preventDefault(); toast('Saved: every change is kept as you make it'); return; }
     if (mod) return;
-    if (e.key === ' ') { e.preventDefault(); if (!this.spaceDown) { this.spaceDown = true; this.syncToolbar(); } return; }
+    if (e.key === ' ') {
+      e.preventDefault();
+      // Space pans; it mustn't also press whichever toolbar button has focus.
+      if (document.activeElement?.tagName === 'BUTTON') document.activeElement.blur();
+      if (!this.spaceDown) { this.spaceDown = true; this.syncToolbar(); }
+      return;
+    }
+    if (e.key === '?') { e.preventDefault(); showShortcuts(); return; }
     const any = this.selectedObjs().length > 0, sel = this.selectedObj();
     if (any && (e.key === 'Delete' || e.key === 'Backspace')) { e.preventDefault(); this.deleteSelected(); return; }
     if (sel?.kind === 'label' && e.key === 'Enter') { e.preventDefault(); this.editLabel(sel); return; }
+    // Arrows nudge the selection: a screen pixel, or ten with Shift.
+    const nudge = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key];
+    if (any && nudge) {
+      e.preventDefault();
+      const step = (e.shiftKey ? 10 : 1) / this.s;
+      const objs = this.selectedObjs();
+      this.commit({ undo: objs.map(clean), redo: objs.map((o) => ({ ...clean(o), ...shifted(o, nudge[0] * step, nudge[1] * step) })) });
+      return;
+    }
+    // Escape first drops whatever is half done (a stroke, a box, a move).
+    if (e.key === 'Escape' && this.gesture && this.gesture.kind !== 'pinch') { this.restore(this.gesture); this.gesture = null; this.pointers.clear(); this.syncToolbar(); this.redraw(); return; }
     if (e.key === 'Escape') { this.sel.clear(); this.closePanels(); this.syncToolbar(); this.redraw(); return; }
     if (KEYS[k]) this.setTool(KEYS[k]);
     else if (k === '0') this.fit();
@@ -1148,6 +1293,7 @@ class Editor {
         keep('ac.width', this.width);
       }
       this.syncToolbar();
+      this.flashSize();
     }
   }
 
@@ -1367,6 +1513,7 @@ class Editor {
   restore(g) {
     if (g.kind === 'place') delete this.doc.objects[g.id];
     else if (g.kind === 'scatter') for (const id of g.placed) delete this.doc.objects[id];
+    else if (g.kind === 'erase') for (const o of g.erased.values()) this.doc.objects[o.id] = o;
     else if (g.kind === 'move') for (const o of g.origs) this.doc.objects[o.id] = { ...this.doc.objects[o.id], ...o };
     else if (g.kind === 'scale' || g.kind === 'rotate' || g.kind === 'node') this.doc.objects[g.id] = { ...this.doc.objects[g.id], ...g.orig };
   }
@@ -1520,6 +1667,7 @@ function nearLine(p, x, y, r) {
 
 // Art used recently on this device, newest first, for the picker.
 const RECENT = ' recent'; // pack names are trimmed, so none starts with a space
+const SEP = '\u241f'; // between a pack's name and a category's, in section keys
 const recent = (kind) => load(`ac.recent.${kind}`, []);
 function useRecent(kind, ids) {
   keep(`ac.recent.${kind}`, [...ids, ...recent(kind).filter((x) => !ids.includes(x))].slice(0, 60));
@@ -1528,3 +1676,36 @@ function useRecent(kind, ids) {
 // Pen sizes from 2 to 800 map pixels on a curve: fine lines and broad washes.
 const penWidth = (v) => Math.round(2 * Math.pow(400, v / 100));
 const penSlider = (w) => Math.round(100 * Math.log(Math.max(2, w) / 2) / Math.log(400));
+
+// A two-tone ring (dark and light, so it shows on any map), a fixed width on
+// screen whatever the zoom; dashed for the scatter brush's reach.
+function ring(ctx, x, y, r, scale, dashed = false) {
+  ctx.lineWidth = 3 / scale;
+  ctx.strokeStyle = 'rgba(255, 244, 234, .8)';
+  ctx.setLineDash(dashed ? [6 / scale, 5 / scale] : []);
+  ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.stroke();
+  ctx.lineWidth = 1.2 / scale;
+  ctx.strokeStyle = 'rgba(43, 33, 24, .9)';
+  ctx.stroke();
+  ctx.setLineDash([]);
+}
+
+// Every shortcut, for the ? list (and kept in step with the README's table).
+export const SHORTCUTS = [
+  ['Tools', [['H, or hold Space', 'Move the view'], ['V', 'Select'], ['L', 'Land and water'], ['G', 'Terrain'], ['P', 'Paths'], ['T', 'Text'],
+    ['B', 'Pen and colour brush'], ['E', 'Eraser'], ['S', 'Stamp'], ['R', 'Scatter']]],
+  ['While painting', [['[  ]', 'Smaller / larger brush or stamp'], ['Alt (hold)', 'Land ↔ water'], ['Shift (rotating)', 'Turn in 15° steps'],
+    ['Ctrl / Cmd click a picture', 'Pick several stamps to place at random']]],
+  ['Selection', [['Drag on empty map, Shift-click', 'Select several'], ['Arrows (Shift: ×10)', 'Nudge'], ['F', 'Flip'],
+    ['[  ]', 'Send back / bring forward'], ['Enter, or double-click', 'Edit a label'], ['Alt-click, or double-click a point', 'Remove a path point'],
+    ['Del', 'Delete'], ['Esc', 'Cancel what’s half done, then clear the selection']]],
+  ['Everywhere', [['Ctrl Z / Ctrl Shift Z (or Y)', 'Undo / redo'], ['Ctrl C / X / V', 'Copy, cut, paste (also between maps)'], ['Ctrl D', 'Duplicate'],
+    ['Ctrl A', 'Select all'], ['0', 'Fit the map'], ['+  −, or the wheel', 'Zoom'], ['?', 'This list']]],
+];
+
+function showShortcuts() {
+  if (document.getElementById('modal-root').childElementCount) return;
+  modal('Keyboard shortcuts', SHORTCUTS.map(([group, rows]) => `<div class="field-label">${group}</div>
+    <table class="keys">${rows.map(([k, what]) => `<tr><td><kbd>${esc(k)}</kbd></td><td>${esc(what)}</td></tr>`).join('')}</table>`).join('')
+    + '<p class="muted small">On a Mac, Cmd works wherever Ctrl is shown.</p>', { wide: true });
+}
