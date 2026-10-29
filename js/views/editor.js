@@ -775,6 +775,7 @@ class Editor {
         <label class="inline">Land <input type="color" name="land" value="${st.land}"></label>
         <label class="inline">Coastline <input type="color" name="coast" value="${st.coast}"></label>
         <label>Coastline width<input type="range" name="coastWidth" min="0" max="24" step="1" value="${st.coastWidth}"></label>
+        <label>Coast roughness <small>smooth to rugged</small><input type="range" name="coastRough" min="0" max="1" step="0.05" value="${st.coastRough}"></label>
         <label class="inline">Shore <select name="coastStyle">${[['ripples', 'Ripples'], ['hatch', 'Hatching'], ['plain', 'Plain']].map(([v, n]) => `<option value="${v}" ${st.coastStyle === v ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
         ${st.coastStyle === 'ripples' ? `<label>Ripples in the sea<input type="range" name="rippleCount" min="1" max="6" step="1" value="${st.rippleCount}"></label>` : ''}
         <label class="check"><input type="checkbox" name="stampShadow" ${st.stampShadow ? 'checked' : ''}> Shadows under stamps</label>
@@ -801,7 +802,7 @@ class Editor {
     };
     $('[data-paper]', el).onclick = () => this.openPicker('overlay');
     $('[data-reset]', el).onclick = () => this.setStyle({
-      sea: null, land: null, coast: null, coastWidth: null, rippleCount: null, stampShadow: null,
+      sea: null, land: null, coast: null, coastWidth: null, coastRough: null, rippleCount: null, stampShadow: null,
       grid: null, gridSize: null, gridOpacity: null, vignette: null, frame: null, overlay: null, overlayOpacity: null,
       coastStyle: null, scaleBar: null, scaleText: null, scaleLength: null,
     }).then(() => this.renderStylePanel());

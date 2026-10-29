@@ -291,10 +291,10 @@ export const docStyle = (doc) => doc?.objects?.style && !doc.objects.style.delet
 // land onto it), 'ground' (cities and battlemaps: all land; the water brush
 // carves lakes and rivers out of it), or unset (maps made before map types:
 // plain paper until land is painted, then sea around it).
-const STYLE_KEYS = ['surface', 'sea', 'coast', 'land', 'coastWidth', 'rippleCount', 'coastStyle', 'stampShadow',
+const STYLE_KEYS = ['surface', 'coastRough', 'sea', 'coast', 'land', 'coastWidth', 'rippleCount', 'coastStyle', 'stampShadow',
   'grid', 'gridSize', 'gridOpacity', 'vignette', 'frame', 'overlay', 'overlayOpacity', 'scaleBar', 'scaleText', 'scaleLength'];
 const FINISH = {
-  coastStyle: 'ripples', grid: 'none', gridSize: 128, gridOpacity: 0.25, vignette: 0, frame: 'none', overlay: null, overlayOpacity: 0.35,
+  coastRough: 0, coastStyle: 'ripples', grid: 'none', gridSize: 128, gridOpacity: 0.25, vignette: 0, frame: 'none', overlay: null, overlayOpacity: 0.35,
   scaleBar: 'none', scaleText: '100 miles', scaleLength: 0.2,
 };
 export function mapStyle(doc) {
@@ -355,7 +355,8 @@ function strokeBox(o) {
   const p = o.points;
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
   for (let i = 0; i < p.length; i += 2) { x0 = Math.min(x0, p[i]); x1 = Math.max(x1, p[i]); y0 = Math.min(y0, p[i + 1]); y1 = Math.max(y1, p[i + 1]); }
-  const r = o.width / 2 + (o.soft || 0) * o.width * 0.5;
+  // (A rough coast wanders past the brush: by at most 150 + 70 + 26 px.)
+  const r = o.width / 2 + 250 + (o.soft || 0) * o.width * 0.5;
   const b = [x0 - r, y0 - r, x1 + r, y1 + r];
   boxes.set(o, b);
   return b;
@@ -412,8 +413,10 @@ function renderLand(project, land, terrain, scale, pics, landTexture, st, into =
     if (st.surface === 'ground') m.fillRect(-d - 1, -d - 1, project.width + 2 * d + 2, project.height + 2 * d + 2);
     for (const s of land) {
       if (!near(s, d)) continue;
-      m.globalCompositeOperation = s.mode === 'erase' ? 'destination-out' : 'source-over';
-      strokePath(m, s.points, s.mode === 'erase' ? s.width - 2 * d : s.width + 2 * d);
+      const erase = s.mode === 'erase';
+      m.globalCompositeOperation = erase ? 'destination-out' : 'source-over';
+      if (st.coastRough > 0) roughStroke(m, s, st.coastRough, erase ? -d : d);
+      else strokePath(m, s.points, erase ? s.width - 2 * d : s.width + 2 * d);
     }
   };
   // Colour (or pattern) the mask and lay it on the result.
@@ -470,6 +473,117 @@ function renderLand(project, land, terrain, scale, pics, landTexture, st, into =
   c.clearRect(cx, cy, cw, ch);
   c.drawImage(out, MARGIN, MARGIN, cw, ch, cx, cy, cw, ch);
   return into.canvas;
+}
+
+// --- rough coasts ----------------------------------------------------------
+//
+// A land (or water) stroke's edge made irregular, like a real shoreline. The
+// brush wanders: along the stroke its centre line drifts to either side and
+// its width swells and narrows, following smooth random waves, which gives
+// bays and headlands; a sprinkle of small circles along both edges adds
+// finer wiggle. Everything comes from a random sequence seeded by the
+// stroke's id, so a coast looks the same every time and on every device.
+// d grows (or, negative, shrinks) it all, for the coast and ripple rings.
+const roughCache = new WeakMap(); // stroke → { rough, segs: [x0, y0, x1, y1, width, …], bumps: [x, y, r, …] }
+
+// Smooth 1-D noise from -1 to 1: random values a unit apart, eased between.
+function noise1d(rand) {
+  const v = [];
+  return (t) => {
+    const i = Math.floor(t), f = t - i;
+    while (v.length <= i + 1) v.push(rand() * 2 - 1);
+    const e = (1 - Math.cos(f * Math.PI)) / 2;
+    return v[i] * (1 - e) + v[i + 1] * e;
+  };
+}
+
+function roughShape(s, rough) {
+  const hit = roughCache.get(s);
+  if (hit && hit.rough === rough) return hit;
+  const rand = seeded(s.id);
+  const w = s.width;
+  // Sizes in map pixels: in proportion to the brush, within limits, so a
+  // huge brush doesn't get huge lumps or a small one lose all character.
+  const drift = rough * Math.min(0.14 * w, 150), swell = rough * Math.min(0.22 * w, 170);
+  const waveA = Math.max(90, w * 0.9), waveB = Math.max(50, w * 0.4);
+  const nA = noise1d(rand), nB = noise1d(rand), nC = noise1d(rand), nD = noise1d(rand);
+  const line = samplePath(s.points, Math.max(3, Math.min(w / 16, waveB / 6, waveA / 24)));
+  // Per sample: centre (drifted), the direction across the stroke, width.
+  const pts = [];
+  let dist = 0;
+  for (let i = 0; i < line.length; i++) {
+    const [x, y] = line[i];
+    if (i) dist += Math.hypot(x - line[i - 1][0], y - line[i - 1][1]);
+    const [ax, ay] = line[Math.max(0, i - 1)], [bx, by] = line[Math.min(line.length - 1, i + 1)];
+    const len = Math.hypot(bx - ax, by - ay) || 1, nx = -(by - ay) / len, ny = (bx - ax) / len;
+    const off = (nA(dist / waveA) * 0.6 + nD(dist / (waveA / 4)) * 0.4) * drift;
+    const width = Math.max(w * 0.25, w - swell * 0.6 + (nB(dist / waveB) * 0.7 + nC(dist / (waveB / 3)) * 0.3) * swell);
+    pts.push(x + nx * off, y + ny * off, nx, ny, width);
+  }
+  // Finer wiggle: small circles just inside the wandering edges.
+  const bumps = [];
+  const size = rough * Math.max(1.5, Math.min(26, w * 0.04));
+  if (size >= 1.5) {
+    for (let i = 0; i < pts.length; i += 5) {
+      const [x, y, nx, ny, sw] = pts.slice(i, i + 5);
+      const step = i ? Math.hypot(x - pts[i - 5], y - pts[i - 4]) : size * 1.6;
+      const n = Math.round(step / (size * 1.6) + rand() * 0.5);
+      for (let k = 0; k < n; k++) {
+        const t = rand(), bx = i ? pts[i - 5] + (x - pts[i - 5]) * t : x, by = i ? pts[i - 4] + (y - pts[i - 4]) * t : y;
+        for (const side of [1, -1]) bumps.push(bx + nx * side * (sw / 2 - size * 0.4), by + ny * side * (sw / 2 - size * 0.4), size * (0.3 + 0.7 * rand()));
+      }
+    }
+  }
+  const shape = { rough, pts, bumps };
+  roughCache.set(s, shape);
+  return shape;
+}
+
+// One filled outline for the wandering brush (its two edges joined), circles
+// along its middle so tight bends can't leave gaps, and the fine wiggle:
+// a few fills per stroke, whatever its length.
+function roughStroke(ctx, s, rough, d) {
+  const { pts, bumps } = roughShape(s, rough);
+  const n = pts.length / 5;
+  const half = (i) => Math.max(0, pts[5 * i + 4] / 2 + d);
+  ctx.beginPath();
+  for (let i = 0; i < n; i++) {
+    const h = half(i);
+    ctx[i ? 'lineTo' : 'moveTo'](pts[5 * i] + pts[5 * i + 2] * h, pts[5 * i + 1] + pts[5 * i + 3] * h);
+  }
+  for (let i = n - 1; i >= 0; i--) {
+    const h = half(i);
+    ctx.lineTo(pts[5 * i] - pts[5 * i + 2] * h, pts[5 * i + 1] - pts[5 * i + 3] * h);
+  }
+  ctx.closePath();
+  ctx.fill();
+  ctx.beginPath();
+  for (let i = 0; i < n; i += 4) {
+    const h = half(i);
+    if (h > 0) { ctx.moveTo(pts[5 * i] + h, pts[5 * i + 1]); ctx.arc(pts[5 * i], pts[5 * i + 1], h, 0, Math.PI * 2); }
+  }
+  const h = half(n - 1);
+  if (h > 0) { ctx.moveTo(pts[5 * n - 5] + h, pts[5 * n - 4]); ctx.arc(pts[5 * n - 5], pts[5 * n - 4], h, 0, Math.PI * 2); }
+  for (let i = 0; i < bumps.length; i += 3) {
+    const r = bumps[i + 2] + d;
+    if (r <= 0) continue;
+    ctx.moveTo(bumps[i] + r, bumps[i + 1]);
+    ctx.arc(bumps[i], bumps[i + 1], r, 0, Math.PI * 2);
+  }
+  ctx.fill();
+}
+
+// A repeatable random sequence (mulberry32) from a string.
+function seeded(str) {
+  let h = 1779033703;
+  for (let i = 0; i < str.length; i++) h = Math.imul(h ^ str.charCodeAt(i), 3432918353), h = (h << 13) | (h >>> 19);
+  let a = h >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
 }
 
 // Diagonal hatching in the coast's colour, a line every 7 map pixels.

@@ -17,10 +17,10 @@ export const SIZES = [
 // type sets where a new map starts (its surface, grid and size) and which art
 // packs the picker shows first. All of it can be changed later in Map style.
 export const MAP_TYPES = {
-  world: { label: 'World', note: 'Starts as sea: paint the continents.', style: { surface: 'sea' } },
-  region: { label: 'Region', note: 'Starts as sea: paint the coast and land.', style: { surface: 'sea' } },
-  city: { label: 'City', note: 'Starts as land: carve rivers and harbours with the water brush.', style: { surface: 'ground' } },
-  battlemap: { label: 'Battlemap', note: 'Starts as ground, with a square grid.', style: { surface: 'ground', land: '#a39f78', coastStyle: 'plain', grid: 'square', gridOpacity: 0.35 } },
+  world: { label: 'World', note: 'Starts as sea: paint the continents.', style: { surface: 'sea', coastRough: 0.5 } },
+  region: { label: 'Region', note: 'Starts as sea: paint the coast and land.', style: { surface: 'sea', coastRough: 0.5 } },
+  city: { label: 'City', note: 'Starts as land: carve rivers and harbours with the water brush.', style: { surface: 'ground', coastRough: 0.4 } },
+  battlemap: { label: 'Battlemap', note: 'Starts as ground, with a square grid.', style: { surface: 'ground', coastRough: 0.3, land: '#a39f78', coastStyle: 'plain', grid: 'square', gridOpacity: 0.35 } },
 };
 export const typeLabel = (t) => MAP_TYPES[t]?.label || '';
 // Battlemaps are measured in squares; virtual tabletops commonly use these sizes.
