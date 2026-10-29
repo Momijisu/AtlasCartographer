@@ -4,16 +4,32 @@ import { liveObjects } from './store.js';
 
 export const PAPER = '#e8dcc0';
 
+// Land and sea: once any land is painted, the map becomes sea around it.
+export const STYLE = {
+  sea: '#b5cac3',
+  ripple: 'rgba(58, 88, 92, .32)',
+  coast: '#3b2f22',
+  land: '#e9dcbc',
+  ripples: [26, 52, 84], // ring distances from the shore, map pixels
+  rippleWidth: 2.2,
+  coastWidth: 5,
+  textureSize: 512, // a land texture repeats every this many map pixels
+};
+
 // Strokes are flat [x0, y0, x1, y1, …] point lists in map pixels.
 export function drawStroke(ctx, o) {
-  const p = o.points;
-  if (!p || p.length < 2) return;
   ctx.strokeStyle = ctx.fillStyle = o.color;
-  ctx.lineWidth = o.width;
+  strokePath(ctx, o.points, o.width);
+}
+
+// A smoothed polyline of the given width (a dot for a single point).
+export function strokePath(ctx, p, width) {
+  if (!p || p.length < 2 || width <= 0) return;
+  ctx.lineWidth = width;
   ctx.lineCap = ctx.lineJoin = 'round';
   if (p.length === 2) {
     ctx.beginPath();
-    ctx.arc(p[0], p[1], o.width / 2, 0, Math.PI * 2);
+    ctx.arc(p[0], p[1], width / 2, 0, Math.PI * 2);
     ctx.fill();
     return;
   }
@@ -47,11 +63,14 @@ export function drawStamp(ctx, o, img, placeholder = false) {
 }
 
 // image(assetId) → a loaded picture or null (see images.js).
-export function drawDoc(ctx, project, doc, { image = () => null, placeholder = false } = {}) {
+// landScale: resolution of the land layer relative to the map (it's cached).
+export function drawDoc(ctx, project, doc, { image = () => null, placeholder = false, landScale = 0.5 } = {}) {
   ctx.fillStyle = PAPER;
   ctx.fillRect(0, 0, project.width, project.height);
   if (!doc) return;
   const objs = liveObjects(doc).sort((a, b) => (a.z || 0) - (b.z || 0));
+  const land = objs.filter((o) => o.kind === 'land');
+  if (land.length) ctx.drawImage(landLayer(project, doc, land, landScale, image), 0, 0, project.width, project.height);
   for (const o of objs) {
     if (o.kind === 'stroke') drawStroke(ctx, o);
     else if (o.kind === 'stamp') drawStamp(ctx, o, image(o.asset), placeholder);
@@ -65,5 +84,74 @@ export function drawThumb(canvas, project, doc, opts, maxW = 480, maxH = 360) {
   canvas.height = Math.max(1, Math.round(project.height * s));
   const ctx = canvas.getContext('2d');
   ctx.setTransform(s, 0, 0, s, 0, 0);
-  drawDoc(ctx, project, doc, opts);
+  drawDoc(ctx, project, doc, { ...opts, landScale: s });
+}
+
+// --- land and sea ---------------------------------------------------------
+//
+// Land is painted as strokes: 'add' strokes raise land, 'erase' strokes carve
+// water back out, in z order. The coast effects come from drawing the same
+// strokes wider: growing every land stroke (and shrinking every carve) by d
+// gives the land's outline pushed d pixels out to sea. From the outside in:
+// sea, ripple rings, a dark coastline, then the land fill on top.
+
+const layers = new Map(); // `${project.id}:${scale}` → { sig, canvas }
+
+export const docStyle = (doc) => doc?.objects?.style && !doc.objects.style.deleted ? doc.objects.style : {};
+
+function landLayer(project, doc, land, scale, image) {
+  const style = docStyle(doc);
+  const tex = style.landTexture ? image(style.landTexture) : null;
+  const sig = land.map((o) => o.id + ':' + o.updatedAt).join() + `|${project.width}x${project.height}|${style.landTexture || ''}:${tex ? tex.naturalWidth : 0}`;
+  const key = `${project.id}:${scale}`;
+  const hit = layers.get(key);
+  if (hit && hit.sig === sig) return hit.canvas;
+  const canvas = renderLand(project, land, scale, tex);
+  layers.set(key, { sig, canvas });
+  return canvas;
+}
+
+function renderLand(project, land, scale, tex) {
+  const w = Math.max(1, Math.round(project.width * scale)), h = Math.max(1, Math.round(project.height * scale));
+  const out = makeCanvas(w, h);
+  const mask = makeCanvas(w, h);
+  const o = out.getContext('2d'), m = mask.getContext('2d');
+  o.fillStyle = STYLE.sea;
+  o.fillRect(0, 0, w, h);
+  // Fill the land grown by d, in a colour (or with a pattern) of its own.
+  const layer = (d, fill) => {
+    m.globalCompositeOperation = 'source-over';
+    m.setTransform(1, 0, 0, 1, 0, 0);
+    m.clearRect(0, 0, w, h);
+    m.setTransform(scale, 0, 0, scale, 0, 0);
+    m.fillStyle = m.strokeStyle = '#000';
+    for (const s of land) {
+      m.globalCompositeOperation = s.mode === 'erase' ? 'destination-out' : 'source-over';
+      strokePath(m, s.points, s.mode === 'erase' ? s.width - 2 * d : s.width + 2 * d);
+    }
+    m.globalCompositeOperation = 'source-in';
+    m.fillStyle = fill;
+    m.fillRect(0, 0, project.width, project.height);
+    o.drawImage(mask, 0, 0);
+  };
+  for (const r of [...STYLE.ripples].sort((a, b) => b - a)) {
+    layer(r, STYLE.ripple);
+    layer(r - STYLE.rippleWidth, STYLE.sea);
+  }
+  layer(STYLE.coastWidth, STYLE.coast);
+  let fill = STYLE.land;
+  if (tex) {
+    const pat = m.createPattern(tex, 'repeat');
+    const k = STYLE.textureSize / Math.max(tex.naturalWidth, tex.naturalHeight, 1);
+    pat.setTransform(new DOMMatrix([k, 0, 0, k, 0, 0]));
+    fill = pat;
+  }
+  layer(0, fill);
+  return out;
+}
+
+function makeCanvas(w, h) {
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  return c;
 }

@@ -9,18 +9,19 @@ import * as images from '../images.js';
 import { $, $$, esc, uid, toast } from '../util.js';
 import { icon } from '../icons.js';
 import { setTitle, state } from '../ui.js';
-import { drawDoc, drawStroke } from '../render.js';
+import { drawDoc, drawStroke, strokePath, docStyle, STYLE } from '../render.js';
 
 const INKS = ['#2b2118', '#6b4a2b', '#2f5d7c', '#3f6b3a', '#8e2f22'];
 const TOOLS = [
   ['pan', 'hand-pointing', 'Move the view (H, or hold Space)'],
   ['select', 'arrows-out-cardinal', 'Select, move, scale and rotate stamps (V)'],
+  ['land', 'globe-hemisphere-west', 'Land and water (L)'],
   ['pen', 'pencil-line', 'Ink pen (B)'],
   ['eraser', 'x', 'Eraser (E)'],
   ['stamp', 'mountains', 'Stamp: place art from the library (S)'],
   ['scatter', 'tree-evergreen', 'Scatter: paint many stamps at once (R)'],
 ];
-const KEYS = { h: 'pan', v: 'select', b: 'pen', e: 'eraser', s: 'stamp', r: 'scatter' };
+const KEYS = { h: 'pan', v: 'select', l: 'land', b: 'pen', e: 'eraser', s: 'stamp', r: 'scatter' };
 const HANDLE = 9; // screen pixels
 const ROT_OFFSET = 34;
 
@@ -45,6 +46,11 @@ export async function viewEditor(view, id) {
       <div class="toolbar" role="toolbar" aria-label="Tools">
         ${TOOLS.map(([t, ic, title]) => `<button class="tool" data-tool="${t}" title="${title}" aria-label="${title.replace(/ \(.*/, '')}">${icon(ic)}</button>`).join('')}
         <span class="tb-sep"></span>
+        <span class="tb-group" data-for="land">
+          <span class="seg land-mode"><button type="button" data-landmode="add" title="Paint land (hold Alt for water)">Land</button><button type="button" data-landmode="erase" title="Paint water">Water</button></span>
+          <input type="range" class="land-size" min="0" max="100" step="1" title="Brush size ([ and ])" aria-label="Land brush size">
+          <button class="brush-chip texture-chip" data-act="textures" title="Land texture" aria-label="Land texture"></button>
+        </span>
         <span class="tb-group" data-for="pen"><span class="swatches">${INKS.map((c) => `<button class="swatch" data-ink="${c}" style="--c:${c}" aria-label="Ink ${c}"></button>`).join('')}</span></span>
         <span class="tb-group" data-for="pen eraser"><input type="range" class="width" min="2" max="80" step="1" title="Size ([ and ])" aria-label="Pen size"></span>
         <span class="tb-group" data-for="stamp scatter">
@@ -94,6 +100,9 @@ class Editor {
     this.ink = load('ac.ink', INKS[0]);
     this.width = load('ac.width', 8);
     this.stampSize = load('ac.stampSize', 256);
+    this.landSize = load('ac.landSize', 256);
+    this.landMode = load('ac.landMode', 'add');
+    this.pickerMode = 'stamp'; // or 'texture': what the picker is choosing
     this.brush = load('ac.brush', []).filter((id) => A.asset(id)); // asset ids to stamp with
     this.multi = load('ac.multi', false);
     this.selected = null;
@@ -128,6 +137,10 @@ class Editor {
     this.canvas.height = Math.round(r.height * dpr);
     this.redraw();
   }
+
+  // The land layer is drawn at up to 2048 pixels across, to keep its memory
+  // reasonable on phones.
+  landScale() { return Math.min(1, 2048 / Math.max(this.project.width, this.project.height)); }
 
   minScale() { return Math.min(this.vw / this.project.width, this.vh / this.project.height) * 0.5; }
 
@@ -176,8 +189,11 @@ class Editor {
     ctx.beginPath();
     ctx.rect(0, 0, this.project.width, this.project.height);
     ctx.clip();
-    drawDoc(ctx, this.project, this.doc, { image: (id) => images.get(id), placeholder: true });
-    if (this.gesture?.kind === 'draw') drawStroke(ctx, this.gesture.stroke);
+    drawDoc(ctx, this.project, this.doc, { image: (id) => images.get(id), placeholder: true, landScale: this.landScale() });
+    const g = this.gesture;
+    if (g?.kind === 'draw') drawStroke(ctx, g.stroke);
+    // Land being painted shows as plain land or sea; the coast appears when it's done.
+    if (g?.kind === 'land') { ctx.fillStyle = ctx.strokeStyle = g.stroke.mode === 'erase' ? STYLE.sea : STYLE.land; strokePath(ctx, g.stroke.points, g.stroke.width); }
     ctx.restore();
     const sel = this.selectedObj();
     if (sel) this.paintSelection(sel);
@@ -338,6 +354,8 @@ class Editor {
     for (const g of $$('.tb-group', this.root)) g.hidden = !g.dataset.for.split(' ').includes(this.tool);
     $('.width', this.root).value = this.width;
     $('.stamp-size', this.root).value = sliderFromSize(this.stampSize);
+    $('.land-size', this.root).value = sliderFromSize(this.landSize);
+    for (const b of $$('[data-landmode]', this.root)) b.classList.toggle('on', b.dataset.landmode === this.landMode);
     const hasSel = !!this.selectedObj();
     for (const b of $$('[data-for="select"] button', this.root)) b.disabled = !hasSel;
     this.canvas.style.cursor = panning ? (this.gesture?.kind === 'pan' ? 'grabbing' : 'grab') : this.tool === 'select' ? 'default' : 'crosshair';
@@ -345,16 +363,35 @@ class Editor {
   }
 
   async renderChip() {
-    const chip = $('.brush-chip', this.root);
+    const chip = $('[data-act="picker"]', this.root);
     if (!chip) return;
     const ids = this.brush.filter((id) => A.asset(id));
     const url = ids.length && await A.thumbURL(ids[0]);
     chip.innerHTML = url ? `<img src="${url}" alt="">${ids.length > 1 ? `<span class="chip-count">${ids.length}</span>` : ''}` : icon('plus');
+    const tex = docStyle(this.doc).landTexture;
+    const turl = tex && A.asset(tex) && await A.thumbURL(tex);
+    $('.texture-chip', this.root).innerHTML = turl ? `<img src="${turl}" alt="">` : '<span class="chip-plain"></span>';
   }
 
-  openPicker() {
+  openPicker(mode = 'stamp') {
+    this.pickerMode = mode;
     $('.picker', this.root).hidden = false;
     this.renderPicker();
+  }
+
+  togglePicker(mode) {
+    const p = $('.picker', this.root);
+    if (!p.hidden && this.pickerMode === mode) p.hidden = true;
+    else this.openPicker(mode);
+  }
+
+  // Land texture: a document-wide setting, kept in the 'style' object so it
+  // syncs (and undoes) like any other change.
+  setLandTexture(id) {
+    const old = this.doc.objects.style;
+    const base = old && !old.deleted ? clean(old) : { id: 'style', kind: 'style' };
+    this.commit({ undo: [old && !old.deleted ? clean(old) : { id: 'style', deleted: true }], redo: [{ ...base, landTexture: id }] })
+      .then(() => this.renderChip());
   }
 
   // The art picker: a pack and a category of stamps, as a grid. A tap uses
@@ -363,36 +400,48 @@ class Editor {
   renderPicker() {
     const el = $('.picker', this.root);
     if (!el || el.hidden) return;
-    const packs = A.packs().map((p) => ({ ...p, categories: p.categories.filter((c) => c.kind === 'stamp') })).filter((p) => p.categories.length);
+    const tex = this.pickerMode === 'texture';
+    const title = tex ? 'Land texture' : 'Stamps';
+    const packs = A.packs().map((p) => ({ ...p, categories: p.categories.filter((c) => c.kind === this.pickerMode) })).filter((p) => p.categories.length);
     if (!packs.length) {
-      el.innerHTML = `<header><b>Stamps</b><button class="icon-btn" data-close aria-label="Close">${icon('x')}</button></header>
-        <p class="muted pad">No stamps yet. Import art in the <a href="#/library">Art library</a>.</p>`;
+      el.innerHTML = `<header><b>${title}</b><button class="icon-btn" data-close aria-label="Close">${icon('x')}</button></header>
+        <p class="muted pad">No ${tex ? 'textures' : 'stamps'} yet. Import art in the <a href="#/library">Art library</a>${tex ? ', and mark a category as Textures there' : ''}.</p>
+        ${tex ? '<div class="pk-actions"><button class="btn small" data-plain>Plain land</button></div>' : ''}`;
+      $('[data-plain]', el)?.addEventListener('click', () => this.setLandTexture(null));
       $('[data-close]', el).onclick = () => { el.hidden = true; };
       return;
     }
-    let pack = packs.find((p) => p.name === load('ac.pickPack', '')) || packs[0];
-    let cat = pack.categories.find((c) => c.name === load('ac.pickCat', '')) || pack.categories[0];
+    const kp = `ac.pickPack.${this.pickerMode}`, kc = `ac.pickCat.${this.pickerMode}`;
+    const pack = packs.find((p) => p.name === load(kp, '')) || packs[0];
+    const cat = pack.categories.find((c) => c.name === load(kc, '')) || pack.categories[0];
     const list = A.liveAssets().filter((a) => a.pack === pack.name && a.category === cat.name)
       .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
-    const chosen = new Set(this.brush);
-    el.innerHTML = `<header><b>Stamps</b>
-        <label class="check small"><input type="checkbox" class="pk-multi" ${this.multi ? 'checked' : ''}> Pick several</label>
+    const chosen = new Set(tex ? [docStyle(this.doc).landTexture] : this.brush);
+    el.innerHTML = `<header><b>${title}</b>
+        ${tex ? '' : `<label class="check small"><input type="checkbox" class="pk-multi" ${this.multi ? 'checked' : ''}> Pick several</label>`}
         <button class="icon-btn" data-close aria-label="Close">${icon('x')}</button></header>
       <div class="pk-filters">
         <select class="pk-pack" aria-label="Pack">${packs.map((p) => `<option ${p === pack ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select>
         <select class="pk-cat" aria-label="Category">${pack.categories.map((c) => `<option value="${esc(c.name)}" ${c === cat ? 'selected' : ''}>${esc(c.name || 'General')} (${c.count})</option>`).join('')}</select>
       </div>
-      <div class="pk-actions"><button class="btn small" data-all>Use all ${list.length}</button><span class="muted small">${this.brush.length} chosen</span></div>
+      <div class="pk-actions">${tex ? '<button class="btn small" data-plain>Plain land</button>'
+        : `<button class="btn small" data-all>Use all ${list.length}</button><span class="muted small">${this.brush.length} chosen</span>`}</div>
       <div class="pk-grid">${list.map((a) => `<button class="tile${chosen.has(a.id) ? ' on' : ''}" data-id="${a.id}" title="${esc(a.name)}">${icon('image')}</button>`).join('')}</div>`;
     $('[data-close]', el).onclick = () => { el.hidden = true; };
-    $('.pk-multi', el).onchange = (e) => { this.multi = e.target.checked; keep('ac.multi', this.multi); };
-    $('.pk-pack', el).onchange = (e) => { keep('ac.pickPack', e.target.value); keep('ac.pickCat', ''); this.renderPicker(); };
-    $('.pk-cat', el).onchange = (e) => { keep('ac.pickCat', e.target.value); this.renderPicker(); };
-    $('[data-all]', el).onclick = () => this.setBrush(list.map((a) => a.id));
+    $('.pk-multi', el)?.addEventListener('change', (e) => { this.multi = e.target.checked; keep('ac.multi', this.multi); });
+    $('.pk-pack', el).onchange = (e) => { keep(kp, e.target.value); keep(kc, ''); this.renderPicker(); };
+    $('.pk-cat', el).onchange = (e) => { keep(kc, e.target.value); this.renderPicker(); };
+    $('[data-all]', el)?.addEventListener('click', () => this.setBrush(list.map((a) => a.id)));
+    $('[data-plain]', el)?.addEventListener('click', () => { this.setLandTexture(null); this.renderPicker(); });
     $('.pk-grid', el).onclick = (e) => {
       const t = e.target.closest('.tile');
       if (!t) return;
       const id = t.dataset.id;
+      if (tex) {
+        this.setLandTexture(id);
+        for (const x of $$('.tile', el)) x.classList.toggle('on', x === t);
+        return;
+      }
       if (this.multi) this.setBrush(chosen.has(id) ? this.brush.filter((x) => x !== id) : [...this.brush, id]);
       else this.setBrush([id]);
       if (this.tool !== 'stamp' && this.tool !== 'scatter') this.setTool('stamp');
@@ -424,11 +473,13 @@ class Editor {
       if (!b || b.disabled) return;
       if (b.dataset.tool) this.setTool(b.dataset.tool);
       if (b.dataset.ink) { this.ink = b.dataset.ink; keep('ac.ink', this.ink); this.syncToolbar(); }
+      if (b.dataset.landmode) { this.landMode = b.dataset.landmode; keep('ac.landMode', this.landMode); this.syncToolbar(); }
       const act = b.dataset.act;
       if (act === 'undo') this.undo();
       else if (act === 'redo') this.redo();
       else if (act === 'fit') this.fit();
-      else if (act === 'picker') { const p = $('.picker', this.root); if (p.hidden) this.openPicker(); else p.hidden = true; }
+      else if (act === 'picker') this.togglePicker('stamp');
+      else if (act === 'textures') this.togglePicker('texture');
       else if (act === 'flip') this.editSelected({ flip: !this.selectedObj()?.flip });
       else if (act === 'front') this.editSelected({ z: this.nextZ() });
       else if (act === 'back') this.editSelected({ z: this.zRange()[0] - 1 });
@@ -436,6 +487,7 @@ class Editor {
     };
     $('.width', this.root).oninput = (e) => { this.width = +e.target.value; keep('ac.width', this.width); };
     $('.stamp-size', this.root).oninput = (e) => { this.stampSize = sizeFromSlider(+e.target.value); keep('ac.stampSize', this.stampSize); };
+    $('.land-size', this.root).oninput = (e) => { this.landSize = sizeFromSlider(+e.target.value); keep('ac.landSize', this.landSize); };
     this.syncToolbar();
 
     const c = this.canvas;
@@ -482,6 +534,9 @@ class Editor {
       if (this.tool === 'stamp' || this.tool === 'scatter') {
         this.stampSize = Math.max(16, Math.min(2048, Math.round(this.stampSize * (up ? 1.15 : 1 / 1.15))));
         keep('ac.stampSize', this.stampSize);
+      } else if (this.tool === 'land') {
+        this.landSize = Math.max(16, Math.min(2048, Math.round(this.landSize * (up ? 1.15 : 1 / 1.15))));
+        keep('ac.landSize', this.landSize);
       } else {
         this.width = Math.max(2, Math.min(80, this.width + (up ? 2 : -2)));
         keep('ac.width', this.width);
@@ -508,7 +563,11 @@ class Editor {
     const [mx, my] = this.toMap(...pt);
     const panning = this.tool === 'pan' || this.spaceDown || e.button === 1 || e.button === 2;
     if (panning) this.gesture = { kind: 'pan', last: pt };
-    else if (this.tool === 'pen') {
+    else if (this.tool === 'land') {
+      // Alt (Option) paints the other way, for quick fixes along a coast.
+      const mode = e.altKey ? (this.landMode === 'add' ? 'erase' : 'add') : this.landMode;
+      this.gesture = { kind: 'land', stroke: { id: uid(), kind: 'land', mode, width: this.landSize, points: [r1(mx), r1(my)] } };
+    } else if (this.tool === 'pen') {
       this.gesture = { kind: 'draw', stroke: { id: uid(), kind: 'stroke', color: this.ink, width: this.width, points: [r1(mx), r1(my)] } };
     } else if (this.tool === 'eraser') {
       this.gesture = { kind: 'erase', erased: new Map() };
@@ -567,10 +626,12 @@ class Editor {
     } else if (g.kind === 'pan') {
       this.x += pt[0] - g.last[0]; this.y += pt[1] - g.last[1];
       g.last = pt;
-    } else if (g.kind === 'draw') {
+    } else if (g.kind === 'draw' || g.kind === 'land') {
       const p = g.stroke.points;
-      // Skip points closer than ~1.5 screen pixels: invisible, and they bloat the file.
-      if (Math.hypot(mx - p[p.length - 2], my - p[p.length - 1]) * this.s < 1.5) return;
+      // Skip points closer than ~1.5 screen pixels (and, for wide land
+      // brushes, a twentieth of the brush): invisible, and they bloat the file.
+      const gap = Math.hypot(mx - p[p.length - 2], my - p[p.length - 1]);
+      if (gap * this.s < 1.5 || (g.kind === 'land' && gap < g.stroke.width / 20)) return;
       p.push(r1(mx), r1(my));
     } else if (g.kind === 'erase') {
       this.eraseAt(pt);
@@ -604,7 +665,7 @@ class Editor {
     }
     this.gesture = null;
     if (cancelled && g.kind !== 'erase') { this.restore(g); this.syncToolbar(); this.redraw(); return; }
-    if (g.kind === 'draw') {
+    if (g.kind === 'draw' || g.kind === 'land') {
       const stroke = { ...g.stroke, z: this.nextZ() };
       this.commit({ undo: [{ id: stroke.id, deleted: true }], redo: [stroke] });
     } else if (g.kind === 'erase' && g.erased.size) {

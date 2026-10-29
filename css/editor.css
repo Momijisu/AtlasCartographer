@@ -73,3 +73,8 @@ body.editing { overflow: hidden; overscroll-behavior: none; }
   .pk-grid { grid-template-columns: repeat(4, 1fr); }
   .toolbar .stamp-size { width: 72px; }
 }
+.land-mode { flex-shrink: 0; }
+.land-mode button { padding: .4em .7em; }
+.toolbar .land-size { width: 96px; min-height: 0; padding: 0; flex-shrink: 0; accent-color: var(--rubric); background: transparent; border: 0; }
+.chip-plain { width: 100%; height: 100%; border-radius: 3px; background: #e9dcbc; box-shadow: inset 0 0 0 2px #3b2f22; }
+@media (max-width: 600px) { .toolbar .land-size { width: 72px; } }
