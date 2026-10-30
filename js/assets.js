@@ -228,19 +228,21 @@ async function makeThumb(blob) {
 }
 
 // entries: [{ path (inside the pack, '/'-separated), blob: () => Promise<Blob> }]
-// onProgress({ done, total, added, skipped }) is called as it goes.
+// An entry may also carry its name, category and kind (from a pack file),
+// which then win over what its path suggests. opts.mapType is what a new pack
+// is made for. onProgress({ done, total, added, skipped }) is called as it goes.
 // A few images are read, hashed and shrunk at a time; their files are saved
 // together, a batch at a time, and each batch's catalogue records only after
 // its pictures are safely stored (so an interrupted import never leaves a
 // record without a picture).
 const IMPORT_WIDE = 3;
 const IMPORT_BATCH = 50;
-export async function importEntries(entries, pack, onProgress = () => {}) {
+export async function importEntries(entries, pack, onProgress = () => {}, opts = {}) {
   const list = entries.filter((e) => isImagePath(e.path));
   const progress = { done: 0, total: list.length, added: 0, skipped: 0 };
   const seen = new Set(); // ids taken by this import, before they are in the catalogue
   // Images added to an existing pack take on what it's made for.
-  const mapType = packs().find((p) => p.name === pack)?.type;
+  const mapType = packs().find((p) => p.name === pack)?.type ?? opts.mapType;
   let ready = [];
   let saving = Promise.resolve();
   const flush = () => {
@@ -274,8 +276,9 @@ export async function importEntries(entries, pack, onProgress = () => {}) {
         const { thumb, w, h } = await makeThumb(blob);
         const parts = e.path.split('/');
         const file = parts.pop();
-        const category = parts.join('/');
-        ready.push({ blob, thumb, rec: { id, name: file.replace(/\.[^.]+$/, ''), pack, category, kind: guessKind(category), type, size: blob.size, w, h, ...(mapType && mapType !== 'any' ? { mapType } : {}) } });
+        const category = e.category ?? parts.join('/');
+        const kind = e.kind === 'texture' || e.kind === 'stamp' ? e.kind : guessKind(category);
+        ready.push({ blob, thumb, rec: { id, name: e.name || file.replace(/\.[^.]+$/, ''), pack, category, kind, type, size: blob.size, w, h, ...(mapType && mapType !== 'any' ? { mapType } : {}) } });
         progress.added++;
       } catch (err) {
         console.warn('Skipped', e.path, err);

@@ -16,7 +16,7 @@ A fantasy map maker for phone and PC, and a companion to [WorldAtlas](https://gi
 - A pen and colour brush from fine lines to broad washes, with opacity and soft edges
 - Layers you can add, rename, reorder, hide and lock
 - Map style: sea, land and coast colours, coast width, rippled, hatched or plain shores, stamp shadows, a paper texture, square or hex grids, darker edges, a frame and a scale bar
-- An art library: import a folder or zip of images, whose folders become packs and categories; tag packs by map type, browse them with previews, search everything, and see what you've used recently
+- An art library: import a folder or zip of images, whose folders become packs and categories; export any pack as a single `.atlaspack` file and import it on another device or install; tag packs by map type, browse them with previews, search everything, and see what you've used recently
 - Export to PNG, WebP or JPEG at full size or smaller, ready to upload to WorldAtlas Maps
 - Duplicate a map, or change its size by scaling everything or changing the canvas
 - Keyboard shortcuts for every tool; press **?** in the editor for the list
@@ -67,6 +67,8 @@ Sync runs shortly after each edit, when the app is reopened or comes back online
 
 Art is never part of the app or this repo. The device that imports a pack uploads it in the background, a few files at a time, and picks up where it left off if interrupted; other devices get the previews straight away and full-size art when it's used, or a whole pack with **Keep offline**. Each image is named by a hash of its contents, so the same file imported twice is stored once. Zips can't be over 4 GB (ZIP64); import the unzipped folder instead, from a desktop browser.
 
+OneDrive keeps art as one file per image, so a device only downloads what it uses and a new image is a single upload. To keep a pack as one file, open it in the Art library and choose **Export pack file**: you get a `.atlaspack` (a zip of the images in their category folders, plus `pack.json` with each image's name, whether its category is stamps or textures, and the map type). **Import pack, zip or images** reads it back, and the installed app on a desktop also opens `.atlaspack` files directly. Images missing from both this device and OneDrive are left out of an export, and the export says how many.
+
 Microsoft limits browser sign-ins to 24 hours. The app renews in the background before then, in a hidden frame, so nothing interrupts you. Browsers that block third-party sign-in cookies (such as Safari) can't renew this way; there the sync badge shows **Reconnect**, and one tap signs you straight back in.
 
 ## Project layout
@@ -84,7 +86,8 @@ js/store.js           maps and their drawings, merging
 js/sync.js            OneDrive sync
 js/assets.js          art catalogue and importing
 js/assetsync.js       moving art to and from OneDrive
-js/zip.js             zip reader
+js/packfile.js        .atlaspack pack files
+js/zip.js             zip reader and writer
 js/auth.js            Microsoft sign-in (auth code + PKCE)
 js/db.js              IndexedDB
 js/icons.js           Phosphor icons (MIT)

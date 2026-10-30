@@ -10,7 +10,7 @@ import { $, esc, toast, timeAgo } from './util.js';
 import { icon } from './icons.js';
 import { viewHome } from './views/home.js';
 import { viewEditor } from './views/editor.js';
-import { viewLibrary, viewPack } from './views/library.js';
+import { viewLibrary, viewPack, importFiles } from './views/library.js';
 import { loadAssets } from './assets.js';
 import * as assetsync from './assetsync.js';
 import * as images from './images.js';
@@ -40,6 +40,13 @@ async function boot() {
   setInterval(renew, 60 * 60e3);
   addEventListener('hashchange', route);
   route();
+  // A pack file opened with the installed app (its file handler).
+  window.launchQueue?.setConsumer(async (params) => {
+    if (!params.files?.length) return;
+    const files = await Promise.all(params.files.map((h) => h.getFile()));
+    location.hash = '#/library';
+    importFiles(files);
+  });
   if (authError) toast('Sign-in failed: ' + authError.message, 7000);
   else if (returned && !returned.silent) toast('Connected to OneDrive');
   if ('serviceWorker' in navigator) {

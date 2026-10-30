@@ -3,7 +3,7 @@ import * as A from '../assets.js';
 import * as assetsync from '../assetsync.js';
 import * as auth from '../auth.js';
 import { meta } from '../store.js';
-import { readZip } from '../zip.js';
+import { readPackFile, exportPack, EXTENSION } from '../packfile.js';
 import { $, $$, esc, modal, confirmDialog, toast } from '../util.js';
 import { icon } from '../icons.js';
 import { setTitle, state } from '../ui.js';
@@ -26,7 +26,7 @@ export async function viewLibrary(view) {
     <div class="page-head"><div><h1>Art library</h1></div>
       <div class="actions">
         <label class="btn" title="A folder of images; its folders become categories">${icon('upload-simple')} Import folder<input type="file" id="pickFolder" webkitdirectory multiple hidden></label>
-        <label class="btn primary">${icon('upload-simple')} Import zip or images<input type="file" id="pickFiles" accept=".zip,application/zip,image/*" multiple hidden></label>
+        <label class="btn primary" title="A pack file (${EXTENSION}), a zip, or loose images">${icon('upload-simple')} Import pack, zip or images<input type="file" id="pickFiles" accept="${EXTENSION},.zip,application/zip,image/*" multiple hidden></label>
       </div></div>
     <div id="importStatus"></div>
     <div id="transferStatus"></div>
@@ -41,7 +41,7 @@ export async function viewLibrary(view) {
         <label class="check" title="Download every image in this pack, for working offline"><input type="checkbox" data-pin="${esc(p.name)}" ${meta.pinned.includes(p.name) ? 'checked' : ''}> Keep offline</label>
       </div>`).join('')}</div>`
     : `<div class="empty-state">${icon('stack', 'empty-emblem')}<h2>No art yet</h2>
-        <p>Import a folder or a zip of images. Its top folder becomes the pack, and the folders inside it become categories (mountains, trees, textures…).</p>
+        <p>Import a pack file, or a folder or zip of images. Its top folder becomes the pack, and the folders inside it become categories (mountains, trees, textures…).</p>
         <p class="muted small">Art is stored on this device and synced to your other devices through OneDrive. It’s never part of the app itself.</p></div>`}
     <p class="muted small center" id="storageNote"></p>`;
 
@@ -53,14 +53,7 @@ export async function viewLibrary(view) {
   $('#pickFiles').onchange = async (e) => {
     const files = [...e.target.files];
     e.target.value = '';
-    const zips = files.filter((f) => /\.zip$/i.test(f.name));
-    const loose = files.filter((f) => !/\.zip$/i.test(f.name));
-    if (loose.length) await startImport(loose.map((f) => ({ path: f.name, blob: async () => f })));
-    for (const z of zips) {
-      try {
-        await startImport(await readZip(z), z.name.replace(/\.zip$/i, ''));
-      } catch (err) { toast(err.message, 6000); }
-    }
+    await importFiles(files);
   };
   for (const cb of $$('[data-pin]', view)) {
     cb.onchange = async () => {
@@ -78,14 +71,31 @@ export async function viewLibrary(view) {
 
 // --- importing ----------------------------------------------------------
 
-async function startImport(raw, fallbackName = '') {
+const isArchive = (f) => /\.(zip|atlaspack)$/i.test(f.name);
+
+// Pack files, zips and loose images, as picked or opened with the app.
+export async function importFiles(files) {
+  const loose = files.filter((f) => !isArchive(f) && A.isImagePath(f.name));
+  if (loose.length) await startImport(loose.map((f) => ({ path: f.name, blob: async () => f })));
+  for (const z of files.filter(isArchive)) {
+    try {
+      const { manifest, entries } = await readPackFile(z);
+      await startImport(entries, z.name.replace(/\.(zip|atlaspack)$/i, ''), manifest);
+    } catch (err) { toast(err.message, 6000); }
+  }
+  if (!loose.length && !files.some(isArchive)) toast(`Pick a pack file (${EXTENSION}), a zip or images`);
+}
+
+// manifest: a pack file's, whose entries already say their category.
+async function startImport(raw, fallbackName = '', manifest = null) {
   if (importing) return toast('Wait for the current import to finish');
-  const { root, entries } = A.splitRoot(raw.filter((e) => A.isImagePath(e.path)));
+  const images = raw.filter((e) => A.isImagePath(e.path));
+  const { root, entries } = manifest ? { root: manifest.name, entries: images } : A.splitRoot(images);
   if (!entries.length) return toast('No images found (PNG, WebP, JPEG, GIF, SVG or AVIF)');
-  const folders = new Set(entries.map((e) => e.path.split('/').slice(0, -1).join('/')));
+  const folders = new Set(entries.map((e) => e.category ?? e.path.split('/').slice(0, -1).join('/')));
   const existing = A.packs().map((p) => p.name);
   const pack = await modal('Import art', `<form class="form">
-      <p>${num(entries.length)} images in ${folders.size} ${folders.size === 1 ? 'folder' : 'folders'}. Each folder becomes a category.</p>
+      <p>${num(entries.length)} images in ${folders.size} ${folders.size === 1 ? (manifest ? 'category' : 'folder') : (manifest ? 'categories' : 'folders')}.${manifest ? '' : ' Each folder becomes a category.'}</p>
       <label>Pack<input name="pack" required maxlength="80" list="packNames" value="${esc(root || fallbackName || 'Imported art')}"></label>
       <datalist id="packNames">${existing.map((n) => `<option value="${esc(n)}">`).join('')}</datalist>
       <p class="muted small">Importing into an existing pack adds to it. Images already in your library are skipped.</p>
@@ -100,7 +110,8 @@ async function startImport(raw, fallbackName = '') {
   importing = { pack, done: 0, total: entries.length, added: 0, skipped: 0 };
   renderImport();
   try {
-    const res = await A.importEntries(entries, pack, (p) => { importing = { pack, ...p }; renderImport(); });
+    const mapType = A.PACK_TYPES.some(([v]) => v === manifest?.mapType) ? manifest.mapType : undefined;
+    const res = await A.importEntries(entries, pack, (p) => { importing = { pack, ...p }; renderImport(); }, { mapType });
     toast(`Imported ${num(res.added)} images into ${pack}${res.skipped ? ` (${num(res.skipped)} skipped)` : ''}`, 5000);
   } catch (e) {
     toast('Import failed: ' + e.message, 6000);
@@ -155,8 +166,10 @@ export async function viewPack(view, name) {
       <label class="inline pack-type">Made for <select id="packType">${A.PACK_TYPES.map(([v, n]) => `<option value="${v}" ${p.type === v ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
       <div class="actions">
         <label class="check"><input type="checkbox" id="pinPack" ${meta.pinned.includes(name) ? 'checked' : ''}> Keep offline</label>
+        <button class="btn" id="exportPack" title="Save the whole pack as one ${EXTENSION} file">${icon('download-simple')} Export pack file</button>
         <button class="btn danger" id="delPack">${icon('trash')} Delete pack</button>
       </div></div>
+    <div id="exportStatus"></div>
     <div id="transferStatus"></div>
     ${p.categories.map((c) => `<details class="cat" ${open ? 'open' : ''} data-cat="${esc(c.name)}">
       <summary><span class="cat-name">${icon('caret-right', 'caret')} ${esc(catLabel(c.name))}</span> <span class="muted small">${num(c.count)}</span>
@@ -202,6 +215,7 @@ export async function viewPack(view, name) {
     await A.setPackType(name, e.target.value);
     toast(e.target.value === 'any' ? 'Shown first for every kind of map' : `Shown first on ${A.PACK_TYPES.find(([v]) => v === e.target.value)[1].toLowerCase()}`);
   };
+  $('#exportPack').onclick = () => exportPackFile(name);
   $('#delPack').onclick = async () => {
     if (!(await confirmDialog(`Delete “${name}” and its ${num(p.count)} images from all your devices and OneDrive? Maps that use them will show gaps.`, 'Delete pack'))) return;
     await A.deletePack(name);
@@ -215,4 +229,67 @@ export async function viewPack(view, name) {
   watchTransfers(() => { for (const t of $$('.tile.missing', view)) { t.classList.remove('missing'); hydrate(t); } });
   const stop = state.cleanup;
   state.cleanup = () => { stop?.(); io.disconnect(); };
+}
+
+// --- exporting ----------------------------------------------------------
+
+let exporting = null;
+state.busy.add(() => !!exporting);
+
+async function exportPackFile(name) {
+  if (exporting) return toast('Wait for the current export to finish');
+  const btn = $('#exportPack');
+  const show = (p) => {
+    const el = $('#exportStatus');
+    if (!el) return;
+    el.innerHTML = p ? `<div class="panel progress-panel">
+        <div><b>${p.stage === 'writing' ? 'Writing the pack file' : 'Gathering images'}</b> <span class="muted">${num(p.done)} of ${num(p.total)}</span></div>
+        <progress max="${p.total}" value="${p.done}"></progress></div>` : '';
+  };
+  exporting = name;
+  if (btn) btn.disabled = true;
+  show({ stage: 'gathering', done: 0, total: A.packs().find((x) => x.name === name)?.count || 0 });
+  let res;
+  try {
+    res = await exportPack(name, show);
+  } catch (e) {
+    return toast('Export failed: ' + e.message, 6000);
+  } finally {
+    exporting = null;
+    show(null);
+    if (btn) btn.disabled = false;
+  }
+  saveDialog(res);
+}
+
+// Saving needs a fresh tap (browsers only share or download straight after
+// one), so the finished file waits behind a button.
+async function saveDialog({ blob, fileName, count, missing }) {
+  const file = new File([blob], fileName, { type: 'application/zip' });
+  const canShare = navigator.canShare?.({ files: [file] }) && matchMedia('(pointer: coarse)').matches;
+  await modal('Pack file ready', `<div class="form">
+      <p><b>${esc(fileName)}</b> · ${num(count)} images · ${fmtBytes(blob.size)}</p>
+      ${missing ? `<p class="warn">${icon('warning')} ${num(missing)} ${missing === 1 ? 'image isn’t' : 'images aren’t'} on this device or OneDrive yet, so ${missing === 1 ? 'it was' : 'they were'} left out.</p>` : ''}
+      <p class="muted small">Import it from the Art library on any device running AtlasCartographer.</p>
+      <div class="actions"><button type="button" class="btn quiet" data-cancel>Close</button>
+        ${canShare ? '<button type="button" class="btn" data-share>Share…</button>' : ''}
+        <button type="button" class="btn primary" data-save>${icon('download-simple')} Save</button></div>
+    </div>`, {
+    onMount: (m, close) => {
+      $('[data-cancel]', m).onclick = () => close(null);
+      $('[data-save]', m).onclick = () => {
+        const url = URL.createObjectURL(file);
+        const a = Object.assign(document.createElement('a'), { href: url, download: fileName });
+        document.body.append(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 60000);
+        close(true);
+      };
+      const share = $('[data-share]', m);
+      if (share) share.onclick = async () => {
+        try { await navigator.share({ files: [file], title: fileName }); close(true); } catch (e) { if (e.name !== 'AbortError') toast('Couldn’t share: ' + e.message); }
+      };
+    },
+  });
 }
