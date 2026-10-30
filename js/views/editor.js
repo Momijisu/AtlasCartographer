@@ -9,7 +9,7 @@ import * as images from '../images.js';
 import { $, $$, esc, uid, toast, modal } from '../util.js';
 import { icon } from '../icons.js';
 import { setTitle, state } from '../ui.js';
-import { drawDoc, drawStroke, strokePath, docStyle, STYLE, editorLandScale, labelBox, drawLabel, FONTS, fontCSS, mapStyle, texturePattern, drawPath, PATHS, docLayers, layerResolver, kindLayer, LAND_LAYER, BUILTIN_LAYERS, samplePath, pointsBox, simplify } from '../render.js';
+import { drawDoc, drawStroke, strokePath, docStyle, STYLE, editorLandScale, labelBox, drawLabel, FONTS, fontCSS, mapStyle, texturePattern, drawPath, PATHS, docLayers, layerResolver, kindLayer, LAND_LAYER, BUILTIN_LAYERS, samplePath, pointsBox, simplify, landNeedsRefresh, refreshLand } from '../render.js';
 import { exportDialog } from '../export.js';
 
 const INKS = ['#2b2118', '#6b4a2b', '#2f5d7c', '#3f6b3a', '#8e2f22'];
@@ -34,6 +34,20 @@ const ROT_OFFSET = 34;
 const load = (k, d) => { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch { return d; } };
 const keep = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* private mode */ } };
 
+// One window edits a map at a time: two would each hold their own copy of
+// the drawing in memory. The first to open it holds a Web Lock; others
+// (another tab, or the installed app) get a read-only view until it's free.
+// Where Web Locks don't exist, every window may edit, as before.
+function claimMap(id) {
+  if (!navigator.locks) return Promise.resolve({ held: true, release() {} });
+  return new Promise((resolve) => {
+    navigator.locks.request(`ac-map-${id}`, { ifAvailable: true }, (lock) => {
+      if (!lock) { resolve({ held: false, release() {} }); return null; }
+      return new Promise((release) => resolve({ held: true, release }));
+    });
+  });
+}
+
 export async function viewEditor(view, id) {
   const project = store.project(id);
   const doc = project && await store.getDoc(id);
@@ -54,6 +68,8 @@ export async function viewEditor(view, id) {
       <div class="toolrail" role="toolbar" aria-label="Tools">
         ${TOOLS.map(([t, ic, title, name]) => `<button class="tool" data-tool="${t}" data-name="${name}" data-key="${title.match(/\(([^)]*)\)$/)[1]}" aria-label="${title.replace(/ \(.*/, '')}">${icon(ic)}</button>`).join('')}
       </div>
+      <div class="ro-banner" role="status" hidden>This map is open in another window. Close it there to edit here.</div>
+      <div class="save-banner" role="alert" hidden></div>
       <div class="tool-tip" hidden></div>
       <div class="map-hint" hidden><span class="hint-text"></span><button class="icon-btn" data-hint-close aria-label="Dismiss the hint">${icon('x')}</button></div>
       <div class="pk-preview" hidden></div>
@@ -116,8 +132,31 @@ export async function viewEditor(view, id) {
       <div class="adjust-panel side-panel" hidden></div>
       <div class="scatter-panel side-panel" hidden></div>
     </div>`;
+  const claim = await claimMap(id);
   const ed = new Editor(view.querySelector('.editor'), project, doc);
-  state.cleanup = () => ed.destroy();
+  ed.claim = claim;
+  if (!claim.held) ed.setReadOnly(true);
+  // Mid-stroke is no time for the app to reload itself after an update.
+  const busy = () => !!ed.gesture || ed.pointers.size > 0;
+  state.busy.add(busy);
+  // When this window is looked at again, see whether the map has been freed.
+  const retake = async () => {
+    if (!ed.readOnly || ed.destroyed) return;
+    const c = await claimMap(id);
+    if (ed.destroyed) { c.release(); return; }
+    if (!c.held) return;
+    ed.claim = c;
+    await ed.setReadOnly(false);
+  };
+  const onShow = () => { if (document.visibilityState === 'visible') retake(); };
+  addEventListener('focus', retake);
+  document.addEventListener('visibilitychange', onShow);
+  state.cleanup = () => {
+    ed.destroy();
+    state.busy.delete(busy);
+    removeEventListener('focus', retake);
+    document.removeEventListener('visibilitychange', onShow);
+  };
   state.onRemote = async (e) => {
     const p = store.project(id);
     if (!p) { toast('This map was deleted on another device'); location.hash = '#/'; return; }
@@ -193,8 +232,47 @@ class Editor {
   }
 
   destroy() {
+    this.destroyed = true;
     this.disposers.forEach((d) => d());
     cancelAnimationFrame(this.raf);
+    clearTimeout(this.refreshTimer);
+    this.claim?.release();
+  }
+
+  // --- one window at a time ---------------------------------------------
+
+  // Read-only: another window is editing this map. The view still moves and
+  // zooms; nothing can be drawn or changed. Going back to editable reads the
+  // map afresh, since the other window will have changed it.
+  async setReadOnly(on) {
+    if (on) {
+      this.readOnly = true;
+      this.tool = 'pan';
+      this.sel.clear();
+      this.closePanels();
+    } else {
+      this.doc = await store.refresh(this.project.id);
+      this.project = store.project(this.project.id) || this.project;
+      await A.loadAssets();
+      this.readOnly = false;
+      this.undoStack = []; this.redoStack = [];
+      this.tool = load('ac.tool', 'pen');
+      if (!TOOLS.some(([t]) => t === this.tool)) this.tool = 'pen';
+    }
+    $('.ro-banner', this.root).hidden = !on;
+    const viewOnly = '[data-act^="zoom"], [data-act="fit"], [data-act="shortcuts"], [data-tool="pan"]';
+    for (const b of $$('.toolrail button, .toolbar button, .toolbar input', this.root)) b.disabled = on && !b.matches(viewOnly);
+    this.syncToolbar();
+    this.syncHistory();
+    this.syncHint();
+    this.redraw();
+  }
+
+  // The "can't save" notice stays up until a save works again.
+  setSaveError(e) {
+    const el = $('.save-banner', this.root);
+    el.hidden = !e;
+    if (e) el.textContent = `Can’t save changes on this device: ${e.message || e.name || 'unknown error'}`;
   }
 
   // --- view transform ---------------------------------------------------
@@ -243,7 +321,40 @@ class Editor {
     this.raf = requestAnimationFrame(() => this.paint());
   }
 
+  // One frame going wrong (say, a canvas the device can't give us) shouldn't
+  // end the drawing: the error is logged once per kind, and the next change
+  // starts a fresh frame on a canvas reset to its defaults.
   paint() {
+    try {
+      this.paintFrame();
+      this.paintError = null;
+      this.scheduleLandRefresh();
+    } catch (e) {
+      if (e.message !== this.paintError) console.error('Drawing a frame failed', e);
+      this.paintError = e.message;
+      this.canvas.width = this.canvas.width; // clears it and drops any half-done state
+    }
+  }
+
+  // The land layer is patched stroke by stroke, which drifts by a shade now
+  // and then; once it has been patched a lot, redraw it in full, but only
+  // when you've paused (it takes a moment) and not during a stroke.
+  scheduleLandRefresh() {
+    if (this.refreshTimer || !landNeedsRefresh(this.project.id)) return;
+    this.refreshTimer = setTimeout(() => {
+      this.refreshTimer = null;
+      const quiet = () => !this.gesture && !this.pointers.size && performance.now() - (this.lastActive || 0) > 1500;
+      const go = () => {
+        if (this.destroyed) return;
+        if (!quiet()) { this.scheduleLandRefresh(); return; }
+        refreshLand(this.project.id);
+        this.redraw();
+      };
+      if (window.requestIdleCallback) requestIdleCallback(go, { timeout: 3000 }); else setTimeout(go, 0);
+    }, 1600);
+  }
+
+  paintFrame() {
     const { ctx, dpr } = this;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
@@ -514,12 +625,21 @@ class Editor {
   // --- editing ----------------------------------------------------------
 
   async apply(objs) {
-    await store.putObjects(this.project.id, objs);
+    if (this.readOnly) return;
+    try {
+      await store.putObjects(this.project.id, objs);
+      this.setSaveError(null);
+    } catch (e) {
+      // What's on screen is kept, and saved with the next change that works.
+      console.error('Saving failed', e);
+      this.setSaveError(e);
+    }
     this.syncHint();
     this.redraw();
   }
 
   async commit(entry) {
+    if (this.readOnly) return;
     this.undoStack.push(entry);
     if (this.undoStack.length > 200) this.undoStack.shift();
     this.redoStack = [];
@@ -528,6 +648,7 @@ class Editor {
   }
 
   async undo() {
+    if (this.readOnly) return;
     const e = this.undoStack.pop();
     if (!e) return;
     this.redoStack.push(e);
@@ -536,6 +657,7 @@ class Editor {
   }
 
   async redo() {
+    if (this.readOnly) return;
     const e = this.redoStack.pop();
     if (!e) return;
     this.undoStack.push(e);
@@ -1380,6 +1502,8 @@ class Editor {
     if (document.getElementById('modal-root').childElementCount) return;
     const mod = e.ctrlKey || e.metaKey;
     const k = e.key.toLowerCase();
+    // Read-only: only the keys that move the view.
+    if (this.readOnly && (mod || ![' ', '?', '0', '+', '=', '-'].includes(k))) return;
     if (mod && k === 'z') { e.preventDefault(); if (e.shiftKey) this.redo(); else this.undo(); return; }
     if (mod && k === 'y') { e.preventDefault(); this.redo(); return; }
     if (mod && k === 'c') { if (this.copySelected()) e.preventDefault(); return; }
@@ -1447,6 +1571,7 @@ class Editor {
   }
 
   down(e) {
+    this.lastActive = performance.now();
     this.canvas.setPointerCapture(e.pointerId);
     this.pointers.set(e.pointerId, this.local(e));
     if (this.pointers.size === 2) {
@@ -1462,7 +1587,7 @@ class Editor {
     if (this.pointers.size > 2) return;
     const pt = this.local(e);
     const [mx, my] = this.toMap(...pt);
-    const panning = this.tool === 'pan' || this.spaceDown || e.button === 1 || e.button === 2;
+    const panning = this.readOnly || this.tool === 'pan' || this.spaceDown || e.button === 1 || e.button === 2;
     if (!panning && this.toolLayer() && !this.readyLayer(this.toolLayer())) { this.pointers.delete(e.pointerId); return; }
     if (panning) this.gesture = { kind: 'pan', last: pt };
     else if (this.tool === 'land') {
@@ -1611,6 +1736,7 @@ class Editor {
   }
 
   up(e, cancelled = false) {
+    this.lastActive = performance.now();
     this.pointers.delete(e.pointerId);
     const g = this.gesture;
     if (!g) return;

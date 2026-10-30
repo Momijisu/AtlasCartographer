@@ -14,6 +14,7 @@ const catLabel = (c) => c || 'General';
 
 // An import keeps going if you leave the page; this is what the page shows.
 let importing = null;
+state.busy.add(() => !!importing);
 
 export async function viewLibrary(view) {
   setTitle('Art library');
@@ -64,7 +65,7 @@ export async function viewLibrary(view) {
   for (const cb of $$('[data-pin]', view)) {
     cb.onchange = async () => {
       await A.setPinned(cb.dataset.pin, cb.checked);
-      if (cb.checked) { toast(auth.isSignedIn() ? 'Downloading the pack…' : 'The pack will download once OneDrive is connected'); assetsync.kick(); }
+      if (cb.checked) { toast(auth.isSignedIn() ? 'Downloading the pack…' : 'The pack will download once OneDrive is connected'); assetsync.kick({ force: true }); }
     };
   }
   renderImport();
@@ -195,7 +196,7 @@ export async function viewPack(view, name) {
   }
   $('#pinPack').onchange = async (e) => {
     await A.setPinned(name, e.target.checked);
-    if (e.target.checked) assetsync.kick();
+    if (e.target.checked) assetsync.kick({ force: true });
   };
   $('#packType').onchange = async (e) => {
     await A.setPackType(name, e.target.value);

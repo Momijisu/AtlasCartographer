@@ -170,12 +170,14 @@ export function renderOneDriveCard() {
       <p class="small">The registration needs this address as a redirect URI (platform: <b>Single-page application</b>):<br><code class="copy">${esc(auth.redirectUri())}</code> <button class="btn small quiet" id="copyRuri">Copy</button></p>
     </details>`;
   $('#connectBtn')?.addEventListener('click', () => auth.signIn().catch((e) => toast(e.message)));
-  $('#syncNowBtn')?.addEventListener('click', () => sync.sync());
+  $('#syncNowBtn')?.addEventListener('click', () => sync.sync({ force: true }));
   $('#disconnectBtn')?.addEventListener('click', async () => {
-    if (!(await confirmDialog('Disconnect OneDrive on this device? Your maps stay here and in OneDrive.', 'Disconnect'))) return;
+    if (!(await confirmDialog('Disconnect OneDrive on this device? Your maps stay here and in OneDrive. If you connect a different Microsoft account later, everything on this device (maps and art) is uploaded to it afresh.', 'Disconnect'))) return;
+    const last = auth.account()?.username?.toLowerCase() || null;
     auth.signOut();
-    // Next time, merge with whatever OneDrive holds from scratch.
-    await store.saveMeta({ eTags: {} });
+    // Next time, merge with whatever OneDrive holds from scratch. Remember who
+    // this was: another account has none of it, and gets all of it.
+    await store.saveMeta({ eTags: {}, lastAccount: last });
     sync.refreshStatus();
   });
   $('#saveCid')?.addEventListener('click', () => {

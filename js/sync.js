@@ -31,6 +31,7 @@ function setStatus(state, message = '') {
 }
 
 export function refreshStatus() {
+  if (status.state === 'busy' && Date.now() < busyUntil) return; // keep saying so while it lasts
   if (auth.isSignedIn()) setStatus(store.isDirty() ? 'pending' : 'synced');
   else if (auth.account()) setStatus('reauth', 'Reconnect OneDrive to resume syncing.');
   else setStatus('off');
@@ -38,8 +39,13 @@ export function refreshStatus() {
 
 let running = null;
 let busyTimer = null;
+let busyUntil = 0; // OneDrive asked us to wait until then
 let again = false;
-export function sync() {
+let forced = false;
+// force: the person asked (the sync button), so don't wait out a throttle.
+export function sync({ force = false } = {}) {
+  if (!force && Date.now() < busyUntil) return Promise.resolve();
+  if (force) forced = true;
   if (running) { again = true; return running; }
   running = run().finally(() => {
     running = null;
@@ -48,14 +54,29 @@ export function sync() {
   return running;
 }
 
+// Signing in to a different account than this device last synced with: that
+// account has none of this device's maps or art, so all of it goes up.
+async function checkAccount() {
+  const last = store.meta.lastAccount;
+  if (!last) return;
+  if ((auth.account()?.username || '').toLowerCase() !== last) {
+    await store.markAllUnsynced();
+    await assetsync.markAllUnsent();
+  }
+  await store.saveMeta({ lastAccount: null });
+}
+
 async function run() {
   if (!auth.isSignedIn()) {
     if (auth.account() && await auth.renewSilently()) return run();
     return refreshStatus();
   }
   if (!navigator.onLine) return setStatus('offline', 'Offline. Changes are saved on this device.');
+  const force = forced;
+  forced = false;
   setStatus('syncing');
   try {
+    await checkAccount();
     await retry(INDEX, syncIndex);
     await retry(CATALOGUE, syncCatalogue);
     const remote = await listDocs();
@@ -71,14 +92,17 @@ async function run() {
       }
     }
     await store.saveMeta({ lastSync: Date.now() });
+    busyUntil = 0;
     setStatus(store.isDirty() ? 'pending' : 'synced');
-    assetsync.kick();
+    assetsync.kick({ force });
   } catch (e) {
     if (e instanceof Busy) {
       const wait = Math.max(30, e.wait);
       setStatus('busy', `OneDrive asked to slow down. Trying again in ${wait < 90 ? `${wait} seconds` : `${Math.round(wait / 60)} minutes`}.`);
+      // Edits and timers meanwhile don't start another sync (sync() waits it out).
+      busyUntil = Date.now() + wait * 1000;
       clearTimeout(busyTimer);
-      busyTimer = setTimeout(sync, wait * 1000);
+      busyTimer = setTimeout(() => sync({ force: true }), wait * 1000);
       return;
     }
     console.error('Sync failed', e);
@@ -125,7 +149,7 @@ async function check(res, what) {
 
 // Download, merge and (if this device is ahead) upload one JSON file.
 // Returns true when local and remote agree, false on an eTag race.
-async function syncFile(path, { merge, collect, dirty, hasLocal, remoteETag, agreed }) {
+async function syncFile(path, { merge, collect, isDirty, hasLocal, remoteETag, agreed }) {
   let item = null;
   const readItem = async () => {
     const res = await graph(`${ROOT}/${path}`);
@@ -142,10 +166,13 @@ async function syncFile(path, { merge, collect, dirty, hasLocal, remoteETag, agr
     const content = await check(await fetch(item['@microsoft.graph.downloadUrl']), 'Downloading ' + path);
     localAhead = await merge(await content.json());
   } else {
-    localAhead = dirty;
+    localAhead = isDirty();
   }
   // Snapshot now: the upload (and the sync baseline) cover exactly this state.
   const snap = await collect();
+  // An edit made while we were talking to OneDrive is in the snapshot, so it
+  // must go up too: the baseline recorded below would otherwise claim it.
+  localAhead ||= isDirty();
   if (localAhead) {
     const res = await graph(`${ROOT}/${path}:/content`, {
       method: 'PUT',
@@ -164,7 +191,7 @@ function syncIndex() {
   return syncFile(INDEX, {
     merge: (json) => store.mergeProjects(json.projects || []),
     collect: () => ({ rev: store.meta.localRev, body: { projects: [...store.projects.values()] } }),
-    dirty: store.meta.localRev > store.meta.syncedRev,
+    isDirty: () => store.meta.localRev > store.meta.syncedRev,
     hasLocal: store.projects.size > 0,
     agreed: (snap) => store.saveMeta({ syncedRev: snap.rev }),
   });
@@ -174,7 +201,7 @@ function syncCatalogue() {
   return syncFile(CATALOGUE, {
     merge: (json) => assets.mergeAssets(json.assets || []),
     collect: () => ({ rev: store.meta.assetRev, body: { assets: [...assets.assets.values()] } }),
-    dirty: store.meta.assetRev > store.meta.assetSynced,
+    isDirty: () => store.meta.assetRev > store.meta.assetSynced,
     hasLocal: assets.assets.size > 0,
     agreed: (snap) => store.saveMeta({ assetSynced: snap.rev }),
   });
@@ -192,7 +219,7 @@ async function syncDoc(id, remoteETag) {
       const rev = store.meta.docRev[id] || 0;
       return { rev, body: { id, objects: (await store.getDoc(id))?.objects || {} } };
     },
-    dirty: store.docDirty(id),
+    isDirty: () => store.docDirty(id),
     hasLocal: await store.hasDoc(id),
     remoteETag,
     agreed: (snap) => store.saveMeta({ docSynced: { ...store.meta.docSynced, [id]: snap.rev } }),

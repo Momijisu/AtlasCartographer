@@ -131,7 +131,9 @@ function adjusted(img, o) {
 // image(assetId) → a loaded picture or null (see images.js).
 // landScale: resolution of the land layer relative to the map. It's cached
 // for the next frame unless cache is false (one-off renders such as exports).
-export function drawDoc(ctx, project, doc, { image = () => null, placeholder = false, landScale = 0.5, cache = true } = {}) {
+// slot: which cached layer to use ('thumb' for the home page's pictures), so
+// drawing a small copy never evicts the editor's.
+export function drawDoc(ctx, project, doc, { image = () => null, placeholder = false, landScale = 0.5, cache = true, slot = '' } = {}) {
   ctx.fillStyle = PAPER;
   ctx.fillRect(0, 0, project.width, project.height);
   if (!doc) return;
@@ -141,7 +143,7 @@ export function drawDoc(ctx, project, doc, { image = () => null, placeholder = f
   const terrain = objs.filter((o) => o.kind === 'terrain');
   const surface = docStyle(doc).surface;
   if ((land.length || terrain.length || surface) && !hidden.has('land')) {
-    ctx.drawImage(landLayer(project, doc, land, terrain, landScale, image, cache), 0, 0, project.width, project.height);
+    ctx.drawImage(landLayer(project, doc, land, terrain, landScale, image, cache, slot), 0, 0, project.width, project.height);
   }
   const st = mapStyle(doc);
   const shadow = st.stampShadow;
@@ -262,7 +264,7 @@ export function drawThumb(canvas, project, doc, opts, maxW = 480, maxH = 360) {
   canvas.height = Math.max(1, Math.round(project.height * s));
   const ctx = canvas.getContext('2d');
   ctx.setTransform(s, 0, 0, s, 0, 0);
-  drawDoc(ctx, project, doc, { ...opts, landScale: s });
+  drawDoc(ctx, project, doc, { ...opts, landScale: s, slot: 'thumb' });
 }
 
 // --- land and sea ---------------------------------------------------------
@@ -273,7 +275,14 @@ export function drawThumb(canvas, project, doc, opts, maxW = 480, maxH = 360) {
 // gives the land's outline pushed d pixels out to sea. From the outside in:
 // sea, ripple rings, a dark coastline, then the land fill on top.
 
-const layers = new Map(); // project id (or id:thumb) → { sig, canvas }
+const layers = new Map(); // project id (or id:slot) → { look, strokes, canvas, partials }
+const PARTIALS = 25;
+
+// Has the editor's land layer been patched often enough that it's worth
+// redrawing from scratch? That takes a moment, so the editor does it when
+// you've paused, then calls refreshLand.
+export const landNeedsRefresh = (id) => (layers.get(id)?.partials || 0) >= PARTIALS;
+export const refreshLand = (id) => layers.delete(id);
 
 // How sharp the land is in the editor. A land layer at full resolution takes
 // 4 bytes a pixel (48 MB for a 4096 × 3072 map), more than phones and tablets
@@ -327,7 +336,7 @@ export function mapStyle(doc) {
   return st;
 }
 
-function landLayer(project, doc, land, terrain, scale, image, cache) {
+function landLayer(project, doc, land, terrain, scale, image, cache, slot) {
   const style = docStyle(doc);
   const st = mapStyle(doc);
   // A map from before map types is plain paper. Its first land-or-water
@@ -343,12 +352,13 @@ function landLayer(project, doc, land, terrain, scale, image, cache) {
   const look = `${project.width}x${project.height}@${scale}|${style.landTexture || ''}|`
     + texIds.map((id) => pics.get(id)?.naturalWidth || 0).join() + '|' + JSON.stringify(st);
   const strokes = new Map([...land, ...terrain].map((o) => [o.id, o]));
-  // Thumbnails get their own slot, so the home page doesn't evict the editor's layer.
-  const key = scale < 0.2 ? `${project.id}:thumb` : project.id;
+  const key = slot ? `${project.id}:${slot}` : project.id;
   const hit = layers.get(key);
   // Partial redraws can differ from a full one by a shade on a few edge
-  // pixels; a full redraw every so often keeps that from building up.
-  if (hit && hit.look === look && hit.partials < 25) {
+  // pixels. The editor refreshes its layer when it's idle (see
+  // landNeedsRefresh); a thumbnail, redrawn only when you visit the home
+  // page, is simply redrawn in full every so often.
+  if (hit && hit.look === look && (!slot || hit.partials < PARTIALS)) {
     const changed = [];
     for (const [id, o] of strokes) { const was = hit.strokes.get(id); if (!was || was.updatedAt !== o.updatedAt) changed.push(o, ...(was ? [was] : [])); }
     for (const [id, was] of hit.strokes) if (!strokes.has(id)) changed.push(was);

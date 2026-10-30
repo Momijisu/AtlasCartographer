@@ -6,7 +6,7 @@
 import * as store from './store.js';
 import * as auth from './auth.js';
 import * as sync from './sync.js';
-import { $, toast, timeAgo } from './util.js';
+import { $, esc, toast, timeAgo } from './util.js';
 import { icon } from './icons.js';
 import { viewHome } from './views/home.js';
 import { viewEditor } from './views/editor.js';
@@ -15,7 +15,7 @@ import { loadAssets } from './assets.js';
 import * as assetsync from './assetsync.js';
 import * as images from './images.js';
 import { viewSettings, renderOneDriveCard, applyTheme } from './views/settings.js';
-import { state } from './ui.js';
+import { state, isBusy } from './ui.js';
 
 async function boot() {
   applyTheme();
@@ -46,8 +46,11 @@ async function boot() {
     // When an updated version takes over, reload once so old and new files never mix.
     const hadController = !!navigator.serviceWorker.controller;
     let reloaded = false;
+    // Not in the middle of an art import or a stroke: wait until they're done.
+    const reloadWhenSafe = () => { if (isBusy()) setTimeout(reloadWhenSafe, 2000); else location.reload(); };
+    state.reloadWhenSafe = reloadWhenSafe;
     navigator.serviceWorker.addEventListener('controllerchange', () => {
-      if (hadController && !reloaded) { reloaded = true; location.reload(); }
+      if (hadController && !reloaded) { reloaded = true; reloadWhenSafe(); }
     });
     // updateViaCache 'none': always fetch sw.js and js/version.js fresh when checking for updates.
     navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then((reg) => {
@@ -94,7 +97,7 @@ function wireChrome() {
     const st = sync.getStatus().state;
     if (st === 'reauth') auth.signIn().catch((e) => toast(e.message)); // straight back in, no picker
     else if (st === 'off' || st === 'error') location.hash = '#/settings';
-    else sync.sync();
+    else sync.sync({ force: true });
   };
 }
 
@@ -111,7 +114,20 @@ function renderSyncBadge({ state: st, message }) {
   if ($('#oneDriveCard')) renderOneDriveCard();
 }
 
+// Only one view is built at a time. A hash change while one is still loading
+// (it waits on the database) is noted by the token, and the view is built
+// again for the newest address once the first has finished, so a slow view
+// never lands on top of the page you've moved to.
+let navToken = 0, shown = 0, navigating = false;
 async function route() {
+  navToken++;
+  if (navigating) return;
+  navigating = true;
+  try {
+    while (shown !== navToken) { shown = navToken; await show(); }
+  } finally { navigating = false; }
+}
+async function show() {
   state.cleanup?.();
   state.cleanup = null;
   state.onRemote = null;
@@ -128,7 +144,7 @@ async function route() {
     else viewHome(view);
   } catch (e) {
     console.error(e);
-    view.innerHTML = `<div class="empty-state"><h2>Something went wrong</h2><p>${e.message}</p><p><a href="#/">Back to your maps</a></p></div>`;
+    view.innerHTML = `<div class="empty-state"><h2>Something went wrong</h2><p>${esc(e.message)}</p><p><a href="#/">Back to your maps</a></p></div>`;
   }
 }
 state.route = route;

@@ -20,7 +20,7 @@ const docs = new Map(); // project id → document, loaded on first use
 // this device keeps fully downloaded.
 export let meta = {
   key: 'sync', localRev: 0, syncedRev: 0, docRev: {}, docSynced: {}, assetRev: 0, assetSynced: 0,
-  eTags: {}, lastSync: null, pinned: [],
+  eTags: {}, lastSync: null, pinned: [], lastAccount: null,
 };
 
 const listeners = new Set();
@@ -33,10 +33,45 @@ export async function load() {
   meta = { ...meta, ...(await db.get('meta', 'sync')) };
 }
 
-export async function saveMeta(patch) {
-  Object.assign(meta, patch);
-  await db.put('meta', meta);
+// Windows of the app share one stored record of this, each with its own copy
+// in memory, so a save folds in what another window wrote: the revision
+// counters only ever go up, so the larger value is the right one. drop: maps
+// whose revision entries are gone for good (deleted).
+const COUNTERS = ['localRev', 'syncedRev', 'assetRev', 'assetSynced', 'lastSync'];
+const maxMap = (a = {}, b = {}) => {
+  const out = { ...a };
+  for (const [k, v] of Object.entries(b)) out[k] = Math.max(out[k] || 0, v);
+  return out;
+};
+function foldMeta(stored, mem, drop, bump) {
+  const out = { ...stored, ...mem, docRev: maxMap(stored.docRev, mem.docRev), docSynced: maxMap(stored.docSynced, mem.docSynced) };
+  for (const k of COUNTERS) out[k] = Math.max(stored[k] || 0, mem[k] || 0) || mem[k];
+  // A counter bumped here counts one more than whichever copy was ahead
+  // before the bump, so two windows' bumps both register.
+  for (const k of bump) {
+    if (k.startsWith('docRev:')) { const id = k.slice(7); out.docRev[id] = Math.max(stored.docRev?.[id] || 0, (mem.docRev[id] || 1) - 1) + 1; }
+    else out[k] = Math.max(stored[k] || 0, mem[k] - 1) + 1;
+  }
+  for (const id of drop) { delete out.docRev[id]; delete out.docSynced[id]; }
+  return out;
 }
+// Take over what's stored, never lowering anything held in memory.
+function adoptMeta(stored, drop = []) {
+  for (const k of COUNTERS) if ((stored[k] || 0) > (meta[k] || 0)) meta[k] = stored[k];
+  meta.docRev = maxMap(meta.docRev, stored.docRev);
+  meta.docSynced = maxMap(meta.docSynced, stored.docSynced);
+  for (const id of drop) { delete meta.docRev[id]; delete meta.docSynced[id]; }
+}
+
+// bump: counters this save has just raised by one ('localRev', 'assetRev', 'docRev:<id>').
+export async function saveMeta(patch, { drop = [], bump = [] } = {}) {
+  Object.assign(meta, patch);
+  for (const id of drop) { delete meta.docRev[id]; delete meta.docSynced[id]; }
+  adoptMeta(await db.update('meta', 'sync', (stored) => foldMeta(stored || {}, meta, drop, bump)), drop);
+}
+
+// A map's revision entries, once it's deleted: nothing of it is left to upload.
+export const forgetDoc = (id) => saveMeta({}, { drop: [id] });
 
 export const isDirty = () => meta.localRev > meta.syncedRev || meta.assetRev > meta.assetSynced
   || Object.entries(meta.docRev).some(([id, rev]) => rev > (meta.docSynced[id] || 0));
@@ -56,7 +91,7 @@ export async function saveProject(p) {
   p.createdAt ??= p.updatedAt;
   projects.set(p.id, p);
   await db.put('projects', p);
-  await saveMeta({ localRev: meta.localRev + 1 });
+  await saveMeta({ localRev: meta.localRev + 1 }, { bump: ['localRev'] });
   notify({ local: true, store: 'projects', id: p.id });
   return p;
 }
@@ -76,6 +111,7 @@ export async function deleteProject(id) {
   await saveProject({ id, deleted: true });
   docs.delete(id);
   await db.del('docs', [id]);
+  await forgetDoc(id);
 }
 
 // Bring in index records from OneDrive. Returns true if this device has
@@ -93,7 +129,7 @@ export async function mergeProjects(remote) {
   if ([...projects.keys()].some((id) => !seen.has(id))) localAhead = true;
   for (const r of incoming) {
     projects.set(r.id, r);
-    if (r.deleted) { docs.delete(r.id); await db.del('docs', [r.id]); }
+    if (r.deleted) { docs.delete(r.id); await db.del('docs', [r.id]); await forgetDoc(r.id); }
   }
   await db.putMany('projects', incoming);
   if (incoming.length) notify({ local: false, store: 'projects' });
@@ -114,15 +150,44 @@ export async function getDoc(id) {
 export const hasDoc = async (id) => !!(await getDoc(id));
 export const liveObjects = (doc) => Object.values(doc.objects).filter((o) => !o.deleted);
 
+// Write a drawing to the device. If another window saved it since this one
+// read it (rev differs), its newer objects are folded in first, so two
+// windows never overwrite each other's work.
+async function saveDoc(doc) {
+  let folded = false;
+  await db.update('docs', doc.id, (stored) => {
+    if (stored && (stored.rev || 0) !== (doc.rev || 0)) {
+      for (const [oid, r] of Object.entries(stored.objects || {})) {
+        const l = doc.objects[oid];
+        if (!l || (r.updatedAt || 0) > (l.updatedAt || 0)) { doc.objects[oid] = r; folded = true; }
+      }
+    }
+    doc.rev = (stored?.rev || 0) + 1;
+    return doc;
+  });
+  if (folded) notify({ local: false, store: 'docs', id: doc.id });
+}
+
+// Another window may have changed this map while this one wasn't editing it:
+// read it, the index record and the counters afresh.
+export async function refresh(id) {
+  const rec = await db.get('projects', id);
+  if (rec) projects.set(id, rec);
+  docs.delete(id);
+  const stored = await db.get('meta', 'sync');
+  if (stored) adoptMeta(stored);
+  return getDoc(id);
+}
+
 async function bumpDoc(id) {
-  await saveMeta({ docRev: { ...meta.docRev, [id]: (meta.docRev[id] || 0) + 1 } });
+  await saveMeta({ docRev: { ...meta.docRev, [id]: (meta.docRev[id] || 0) + 1 } }, { bump: [`docRev:${id}`] });
 }
 
 // Add or replace objects in a project's drawing (each needs an id).
 export async function putObjects(id, objs) {
   const doc = await getDoc(id);
   for (const o of objs) doc.objects[o.id] = stamp(o, doc.objects[o.id]);
-  await db.put('docs', doc);
+  await saveDoc(doc);
   await bumpDoc(id);
   // Touch the project too, so the home page lists recently edited maps first.
   const p = projects.get(id);
@@ -183,7 +248,7 @@ export async function mergeDoc(id, remote) {
   }
   if (Object.keys(doc.objects).some((oid) => !(oid in theirs))) localAhead = true;
   docs.set(id, doc);
-  await db.put('docs', doc);
+  await saveDoc(doc);
   if (changed) notify({ local: false, store: 'docs', id });
   return localAhead;
 }
@@ -191,4 +256,15 @@ export async function mergeDoc(id, remote) {
 export async function dropDoc(id) {
   docs.delete(id);
   await db.del('docs', [id]);
+  await forgetDoc(id);
+}
+
+// Make everything on this device count as not yet uploaded, for an account
+// that has none of it.
+export async function markAllUnsynced() {
+  const ids = [...projects.values()].filter((p) => !p.deleted).map((p) => p.id);
+  await saveMeta({
+    eTags: {}, localRev: meta.localRev + 1, assetRev: meta.assetRev + 1,
+    docRev: { ...meta.docRev, ...Object.fromEntries(ids.map((id) => [id, (meta.docRev[id] || 0) + 1])) },
+  }, { bump: ['localRev', 'assetRev', ...ids.map((id) => `docRev:${id}`)] });
 }

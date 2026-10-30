@@ -36,7 +36,7 @@ export async function exportDialog(project) {
     const blob = await renderMap(project, opts);
     const ext = FORMATS.find((f) => f[0] === opts.type)[2];
     download(`${project.name.replace(/[^\w\- ]+/g, '').trim() || 'map'}.${ext}`, blob);
-    toast(`Exported ${esc(project.name)}`);
+    toast(`Exported ${project.name}`);
   } catch (e) {
     toast('Export failed: ' + e.message, 6000);
   }

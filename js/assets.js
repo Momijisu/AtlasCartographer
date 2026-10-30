@@ -14,6 +14,11 @@ import { meta, saveMeta, notify } from './store.js';
 
 export const assets = new Map();
 
+// Bumped whenever the catalogue changes, so the transfer code knows when
+// there may be new files to look for.
+let version = 0;
+export const catalogueVersion = () => version;
+
 export async function loadAssets() {
   assets.clear();
   for (const a of await db.getAll('assets')) assets.set(a.id, a);
@@ -58,7 +63,8 @@ async function saveRecords(recs) {
   if (!recs.length) return;
   for (const r of recs) assets.set(r.id, stamp(r));
   await db.putMany('assets', recs);
-  await saveMeta({ assetRev: meta.assetRev + 1 });
+  version++;
+  await saveMeta({ assetRev: meta.assetRev + 1 }, { bump: ['assetRev'] });
   notify({ local: true, store: 'assets' });
 }
 
@@ -99,7 +105,7 @@ export async function mergeAssets(remote) {
   for (const r of incoming) assets.set(r.id, r);
   await db.putMany('assets', incoming);
   await dropLocal(incoming.filter((r) => r.deleted).map((r) => r.id));
-  if (incoming.length) notify({ local: false, store: 'assets' });
+  if (incoming.length) { version++; notify({ local: false, store: 'assets' }); }
   return localAhead;
 }
 
@@ -140,13 +146,6 @@ async function dropLocal(ids) {
   }
 }
 
-// Bytes of art and thumbnails stored on this device.
-export async function localBytes() {
-  let n = 0;
-  for (const s of ['blobs', 'thumbs']) for (const r of await db.getAll(s)) n += r.blob.size;
-  return n;
-}
-
 // --- importing ----------------------------------------------------------
 
 // If every entry shares one top folder, that's the pack's name (and not a category).
@@ -165,8 +164,9 @@ function loadImage(blob) {
   return new Promise((res, rej) => {
     const img = new Image();
     img.onload = () => res(img);
-    img.onerror = () => rej(new Error('Not a readable image'));
-    img.src = URL.createObjectURL(blob);
+    const url = URL.createObjectURL(blob);
+    img.onerror = () => { URL.revokeObjectURL(url); rej(new Error('Not a readable image')); };
+    img.src = url;
   });
 }
 
