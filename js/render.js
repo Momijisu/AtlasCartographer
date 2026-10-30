@@ -97,13 +97,17 @@ export function drawStamp(ctx, o, img, placeholder = false, shadow = false) {
 // A stamp's picture with its tint (a colour laid over it, tintAmt 0…1) and
 // brightness (-1…1) applied. Made once per picture and setting, then reused.
 // Compositing rather than filters, so it works in every browser.
+// A picture's size in pixels: an image element has naturalWidth, a decoded
+// bitmap only width.
+export const picWidth = (img) => img.naturalWidth || img.width || 0;
+export const picHeight = (img) => img.naturalHeight || img.height || 0;
 const adjustedCache = new WeakMap(); // picture → Map(key → canvas)
 function adjusted(img, o) {
   const key = `${o.tint || ''}:${o.tintAmt || 0}:${o.bright || 0}`;
   let m = adjustedCache.get(img);
   if (!m) adjustedCache.set(img, m = new Map());
   if (m.has(key)) return m.get(key);
-  const w = img.naturalWidth || img.width, h = img.naturalHeight || img.height;
+  const w = picWidth(img), h = picHeight(img);
   const c = makeCanvas(w, h), g = c.getContext('2d');
   g.drawImage(img, 0, 0, w, h);
   if (o.tintAmt > 0 && o.tint) {
@@ -123,7 +127,7 @@ function adjusted(img, o) {
   g.globalAlpha = 1;
   g.globalCompositeOperation = 'destination-in';
   g.drawImage(img, 0, 0, w, h);
-  if (m.size > 20) m.delete(m.keys().next().value);
+  if (m.size > 8) m.delete(m.keys().next().value);
   m.set(key, c);
   return c;
 }
@@ -131,14 +135,24 @@ function adjusted(img, o) {
 // image(assetId) → a loaded picture or null (see images.js).
 // landScale: resolution of the land layer relative to the map. It's cached
 // for the next frame unless cache is false (one-off renders such as exports).
+// overlay: Map of id → object (or null to leave it out) shown in place of the
+// document's own, for things being dragged but not yet part of the drawing.
+// view: [x0, y0, x1, y1], the part of the map on screen, in map pixels. Stamps,
+// strokes, paths and labels wholly outside it aren't drawn (the editor passes
+// it; exports and thumbnails draw everything).
 // slot: which cached layer to use ('thumb' for the home page's pictures), so
 // drawing a small copy never evicts the editor's.
-export function drawDoc(ctx, project, doc, { image = () => null, placeholder = false, landScale = 0.5, cache = true, slot = '' } = {}) {
+export function drawDoc(ctx, project, doc, { image = () => null, placeholder = false, landScale = 0.5, cache = true, slot = '', view = null, overlay = null } = {}) {
   ctx.fillStyle = PAPER;
   ctx.fillRect(0, 0, project.width, project.height);
   if (!doc) return;
   const hidden = new Set(docStyle(doc).hidden || []);
-  const objs = liveObjects(doc).sort((a, b) => (a.z || 0) - (b.z || 0));
+  let live = liveObjects(doc);
+  if (overlay?.size) {
+    live = live.filter((o) => !overlay.has(o.id));
+    for (const o of overlay.values()) if (o && !o.deleted) live.push(o);
+  }
+  const objs = live.sort((a, b) => (a.z || 0) - (b.z || 0));
   const land = objs.filter((o) => o.kind === 'land');
   const terrain = objs.filter((o) => o.kind === 'terrain');
   const surface = docStyle(doc).surface;
@@ -151,7 +165,7 @@ export function drawDoc(ctx, project, doc, { image = () => null, placeholder = f
   const order = docLayers(doc).map((l) => l.id).reverse().filter((id) => !hidden.has(id));
   const lay = layerResolver(doc);
   const byLayer = new Map(order.map((id) => [id, []]));
-  for (const o of objs) byLayer.get(lay(o))?.push(o);
+  for (const o of objs) if (inView(o, view, shadow)) byLayer.get(lay(o))?.push(o);
   for (const id of order) {
     for (const o of byLayer.get(id)) {
       if (o.kind === 'stroke') drawStroke(ctx, o);
@@ -165,6 +179,34 @@ export function drawDoc(ctx, project, doc, { image = () => null, placeholder = f
   for (const id of order) for (const o of byLayer.get(id)) if (o.kind === 'label') drawLabel(ctx, o);
   if (st.frame !== 'none') drawFrame(ctx, project, st.frame);
   if (st.scaleBar !== 'none') drawScaleBar(ctx, project, st);
+}
+
+// --- drawing only what's on screen ---------------------------------------
+
+const boxes_ = new WeakMap(); // object → bounding box of its points (objects are replaced, never edited, once in a map)
+function box_(o, key) {
+  let b = boxes_.get(o);
+  if (!b) boxes_.set(o, b = pointsBox(o[key]));
+  return b;
+}
+
+// Could this object touch the view? Generous: a miss would be a hole in the
+// picture, a false yes only a little wasted work.
+function inView(o, v, shadow) {
+  if (!v) return true;
+  let cx, cy, r;
+  if (o.kind === 'stamp') {
+    cx = o.x; cy = o.y; r = Math.hypot(o.w, o.h) / 2 + (shadow ? o.w * 0.15 : 0) + 2;
+  } else if (o.kind === 'stroke' || o.kind === 'path') {
+    if (!o.points || o.points.length < 2) return true;
+    const b = box_(o, 'points'), pad = o.kind === 'path' ? o.width * 1.5 + 4 : o.width / 2 + (o.soft || 0) * o.width * 0.5 + 2;
+    return b[2] + pad >= v[0] && b[0] - pad <= v[2] && b[3] + pad >= v[1] && b[1] - pad <= v[3];
+  } else if (o.kind === 'label') {
+    if (!o.text) return false;
+    const b = labelBox(o);
+    cx = b.cx; cy = b.cy; r = Math.hypot(b.w, b.h) / 2 + o.size * 0.3;
+  } else return true;
+  return cx + r >= v[0] && cx - r <= v[2] && cy + r >= v[1] && cy - r <= v[3];
 }
 
 // A chequered bar of four sections with its distance written above, in a
@@ -282,7 +324,20 @@ const PARTIALS = 25;
 // redrawing from scratch? That takes a moment, so the editor does it when
 // you've paused, then calls refreshLand.
 export const landNeedsRefresh = (id) => (layers.get(id)?.partials || 0) >= PARTIALS;
-export const refreshLand = (id) => layers.delete(id);
+export const refreshLand = (id) => forgetLand(id);
+
+// A cached layer is a canvas as big as the map (48 MB at 4096 × 3072): drop it
+// as soon as it's not wanted, instead of waiting for the garbage collector.
+function forgetLand(key) {
+  const hit = layers.get(key);
+  if (!hit) return;
+  hit.canvas.width = hit.canvas.height = 0;
+  layers.delete(key);
+}
+// The editor is done with a map: its layer goes (the thumbnail's is small, and kept).
+export const releaseLand = (id) => forgetLand(id);
+export const landCached = (key) => layers.has(key);
+const THUMB_LAYERS = 24; // thumbnails are small; this many are kept
 
 // How sharp the land is in the editor. A land layer at full resolution takes
 // 4 bytes a pixel (48 MB for a 4096 × 3072 map), more than phones and tablets
@@ -350,7 +405,7 @@ function landLayer(project, doc, land, terrain, scale, image, cache, slot) {
   // Everything but the strokes themselves: when only strokes changed, just
   // the area around them is redrawn.
   const look = `${project.width}x${project.height}@${scale}|${style.landTexture || ''}|`
-    + texIds.map((id) => pics.get(id)?.naturalWidth || 0).join() + '|' + JSON.stringify(st);
+    + texIds.map((id) => { const p = pics.get(id); return p ? picWidth(p) : 0; }).join() + '|' + JSON.stringify(st);
   const strokes = new Map([...land, ...terrain].map((o) => [o.id, o]));
   const key = slot ? `${project.id}:${slot}` : project.id;
   const hit = layers.get(key);
@@ -374,7 +429,14 @@ function landLayer(project, doc, land, terrain, scale, image, cache, slot) {
     }
   }
   const canvas = renderLand(project, land, terrain, scale, pics, style.landTexture, st);
+  const old = layers.get(key);
+  if (old && old.canvas !== canvas) old.canvas.width = old.canvas.height = 0;
+  layers.delete(key); // (so a re-set key counts as the newest)
   layers.set(key, { look, strokes, canvas, partials: 0 });
+  if (slot === 'thumb') {
+    const thumbs = [...layers.keys()].filter((k) => k.endsWith(':thumb'));
+    for (const k of thumbs.slice(0, Math.max(0, thumbs.length - THUMB_LAYERS))) forgetLand(k);
+  }
   return canvas;
 }
 
@@ -399,7 +461,7 @@ const meets = (a, b) => a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3]
 // A repeating fill of a library texture, textureSize map pixels a tile.
 export function texturePattern(ctx, img, st) {
   const pat = ctx.createPattern(img, 'repeat');
-  const k = st.textureSize / Math.max(img.naturalWidth, img.naturalHeight, 1);
+  const k = st.textureSize / Math.max(picWidth(img), picHeight(img), 1);
   pat.setTransform(new DOMMatrix([k, 0, 0, k, 0, 0]));
   return pat;
 }
@@ -430,6 +492,7 @@ function renderLand(project, land, terrain, scale, pics, landTexture, st, into =
   }
   const out = makeCanvas(w, h);
   const mask = makeCanvas(w, h);
+  let t = null; // the terrain's own canvas
   const o = out.getContext('2d'), m = mask.getContext('2d');
   const reset = () => {
     m.globalCompositeOperation = 'source-over';
@@ -479,7 +542,8 @@ function renderLand(project, land, terrain, scale, pics, landTexture, st, into =
     o.fillRect(0, 0, w, h);
   }
   if (terrain.length) {
-    const t = makeCanvas(w, h), tc = t.getContext('2d');
+    t = makeCanvas(w, h);
+    const tc = t.getContext('2d');
     // Consecutive strokes of one texture share a pass.
     for (let i = 0; i < terrain.length;) {
       const tex = terrain[i].texture;
@@ -498,11 +562,15 @@ function renderLand(project, land, terrain, scale, pics, landTexture, st, into =
     if (hasLand) { landMask(0); tc.globalCompositeOperation = 'destination-in'; tc.drawImage(mask, 0, 0); }
     o.drawImage(t, 0, 0);
   }
+  // The working canvases are as big as the layer; give their memory back now.
+  mask.width = mask.height = 0;
+  if (t) t.width = t.height = 0;
   if (!into) return out;
   const c = into.canvas.getContext('2d');
   const [cx, cy, cw, ch] = copy;
   c.clearRect(cx, cy, cw, ch);
   c.drawImage(out, MARGIN, MARGIN, cw, ch, cx, cy, cw, ch);
+  out.width = out.height = 0;
   return into.canvas;
 }
 
@@ -675,8 +743,27 @@ export const fontCSS = (key, px) => (FONTS[key] || FONTS.serif)[1](px);
 export const HALO = 'rgba(233, 220, 188, .85)';
 
 let measureCtx;
-// Character advances for a label, and the arc it sits on.
+// Measuring every letter of every label is the slow part of drawing labels,
+// and the answer only changes with these fields. A font that hadn't loaded
+// when something was measured gives different widths once it has, so nothing
+// is kept while fonts are loading, and everything is dropped when they finish.
+const layouts = new Map();
+const fontsReady = () => !document.fonts || document.fonts.status === 'loaded';
+document.fonts?.addEventListener?.('loadingdone', () => layouts.clear());
 function layout(o) {
+  const key = `${o.font}|${o.size}|${o.spacing || 0}|${o.caps ? 1 : 0}|${o.curve || 0}|${o.text}`;
+  const hit = layouts.get(key);
+  if (hit) return hit;
+  const out = measure(o);
+  if (fontsReady()) {
+    if (layouts.size > 3000) layouts.clear();
+    layouts.set(key, out);
+  }
+  return out;
+}
+
+// Character advances for a label, and the arc it sits on.
+function measure(o) {
   measureCtx ??= document.createElement('canvas').getContext('2d');
   const text = o.caps ? o.text.toUpperCase() : o.text;
   measureCtx.font = fontCSS(o.font, o.size);
@@ -693,7 +780,7 @@ function layout(o) {
 export function labelBox(o) {
   if (o.along) {
     // Text on a path: the path's own box, with room for the letters.
-    const b = pointsBox(o.along), pad = o.size * 0.7;
+    const b = box_(o, 'along'), pad = o.size * 0.7;
     return { cx: (b[0] + b[2]) / 2, cy: (b[1] + b[3]) / 2, w: b[2] - b[0] + 2 * pad, h: b[3] - b[1] + 2 * pad, rot: 0 };
   }
   const { total, bend, R } = layout(o);

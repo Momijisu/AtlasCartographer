@@ -150,21 +150,27 @@ export async function getDoc(id) {
 export const hasDoc = async (id) => !!(await getDoc(id));
 export const liveObjects = (doc) => Object.values(doc.objects).filter((o) => !o.deleted);
 
+// Fold what another window saved since this one read the drawing (rev
+// differs) into it: its newer objects are kept. Returns whether anything
+// came in.
+function foldDoc(doc, stored) {
+  let folded = false;
+  if (stored && (stored.rev || 0) !== (doc.rev || 0)) {
+    for (const [oid, r] of Object.entries(stored.objects || {})) {
+      const l = doc.objects[oid];
+      if (!l || (r.updatedAt || 0) > (l.updatedAt || 0)) { doc.objects[oid] = r; folded = true; }
+    }
+  }
+  doc.rev = (stored?.rev || 0) + 1;
+  return folded;
+}
+
 // Write a drawing to the device. If another window saved it since this one
-// read it (rev differs), its newer objects are folded in first, so two
-// windows never overwrite each other's work.
+// read it, its newer objects are folded in first, so two windows never
+// overwrite each other's work.
 async function saveDoc(doc) {
   let folded = false;
-  await db.update('docs', doc.id, (stored) => {
-    if (stored && (stored.rev || 0) !== (doc.rev || 0)) {
-      for (const [oid, r] of Object.entries(stored.objects || {})) {
-        const l = doc.objects[oid];
-        if (!l || (r.updatedAt || 0) > (l.updatedAt || 0)) { doc.objects[oid] = r; folded = true; }
-      }
-    }
-    doc.rev = (stored?.rev || 0) + 1;
-    return doc;
-  });
+  await db.update('docs', doc.id, (stored) => { folded = foldDoc(doc, stored); return doc; });
   if (folded) notify({ local: false, store: 'docs', id: doc.id });
 }
 
@@ -183,16 +189,80 @@ async function bumpDoc(id) {
   await saveMeta({ docRev: { ...meta.docRev, [id]: (meta.docRev[id] || 0) + 1 } }, { bump: [`docRev:${id}`] });
 }
 
-// Add or replace objects in a project's drawing (each needs an id).
+// --- the map's style --------------------------------------------------------
+//
+// The style object holds many separate settings (grid, layers, hidden layers,
+// textures…) that people change independently on different devices, so it
+// merges setting by setting. _u says when each setting last changed (a
+// setting it doesn't list has never been set). Style objects without _u (from
+// before) count every setting as changed when the object was.
+const STYLE_META = new Set(['id', 'kind', 'updatedAt', '_u', 'deleted']);
+const settingTime = (o, k) => (o._u ? o._u[k] ?? 0 : o.updatedAt ?? 0);
+const settingKeys = (...objs) => new Set(objs.flatMap((o) => [...Object.keys(o), ...Object.keys(o._u || {})]).filter((k) => !STYLE_META.has(k)));
+// Equal as data, whatever order the keys came in.
+const canon = (v) => (v && typeof v === 'object' ? (Array.isArray(v) ? v.map(canon) : Object.fromEntries(Object.keys(v).sort().map((k) => [k, canon(v[k])]))) : v);
+const same = (a, b) => JSON.stringify(canon(a)) === JSON.stringify(canon(b));
+
+// A style about to be saved, with _u brought up to date: the settings that
+// differ from the saved one changed now, the rest keep their time.
+function stampStyle(next, prev, now) {
+  const u = {};
+  for (const k of settingKeys(next, prev || {})) {
+    const was = prev && !prev.deleted ? prev[k] : undefined;
+    u[k] = prev && !prev.deleted && same(was, next[k]) ? settingTime(prev, k) : now;
+  }
+  next._u = u;
+}
+
+// Two live style objects as one: for each setting, the newer change.
+export function mergeStyles(l, r) {
+  const out = { id: l.id, kind: l.kind, updatedAt: Math.max(l.updatedAt || 0, r.updatedAt || 0), _u: {} };
+  for (const k of settingKeys(l, r)) {
+    const tl = settingTime(l, k), tr = settingTime(r, k);
+    const from = tr > tl ? r : l;
+    if (k in from) out[k] = from[k];
+    out._u[k] = Math.max(tl, tr);
+  }
+  return out;
+}
+const sameStyle = same;
+
+// The map's index record says when it was last edited (the home page lists
+// recent maps first); touching it for every stroke would rewrite and upload
+// it just as often, so once a second is enough.
+const touched = new Map();
+
+// Add or replace objects in a project's drawing (each needs an id). The
+// drawing, the index record and the counters are saved in one transaction.
 export async function putObjects(id, objs) {
   const doc = await getDoc(id);
-  for (const o of objs) doc.objects[o.id] = stamp(o, doc.objects[o.id]);
-  await saveDoc(doc);
-  await bumpDoc(id);
-  // Touch the project too, so the home page lists recently edited maps first.
+  for (const o of objs) {
+    const prev = doc.objects[o.id];
+    stamp(o, prev);
+    if (o.kind === 'style' && !o.deleted) stampStyle(o, prev, o.updatedAt);
+    doc.objects[o.id] = o;
+  }
   const p = projects.get(id);
-  if (p) await saveProject({ ...p });
+  const touch = !!p && Date.now() - (touched.get(id) || 0) > 1000;
+  let next = null;
+  if (touch) {
+    touched.set(id, Date.now());
+    next = stamp({ ...p }, p);
+    next.createdAt ??= next.updatedAt;
+    projects.set(id, next);
+  }
+  const bump = [`docRev:${id}`, ...(touch ? ['localRev'] : [])];
+  Object.assign(meta, { docRev: { ...meta.docRev, [id]: (meta.docRev[id] || 0) + 1 }, ...(touch ? { localRev: meta.localRev + 1 } : {}) });
+  let folded = false, merged;
+  await db.tx(['docs', 'projects', 'meta'], ({ get, put }) => {
+    get('docs', id, (stored) => { folded = foldDoc(doc, stored); put('docs', doc); });
+    if (next) put('projects', next);
+    get('meta', 'sync', (stored) => { merged = foldMeta(stored || {}, meta, [], bump); put('meta', merged); });
+  });
+  adoptMeta(merged);
+  if (next) notify({ local: true, store: 'projects', id });
   notify({ local: true, store: 'docs', id });
+  if (folded) notify({ local: false, store: 'docs', id });
 }
 
 // An object moved and scaled: every position times k, then shifted by
@@ -243,7 +313,12 @@ export async function mergeDoc(id, remote) {
   let localAhead = false, changed = false;
   for (const [oid, r] of Object.entries(theirs)) {
     const l = doc.objects[oid];
-    if (!l || (r.updatedAt || 0) > (l.updatedAt || 0)) { doc.objects[oid] = r; changed = true; }
+    if (l && r.kind === 'style' && l.kind === 'style' && !l.deleted && !r.deleted) {
+      // Both sides changed settings: take the newer of each.
+      const m = mergeStyles(l, r);
+      if (!sameStyle(m, l)) { doc.objects[oid] = m; changed = true; }
+      if (!sameStyle(m, r)) localAhead = true;
+    } else if (!l || (r.updatedAt || 0) > (l.updatedAt || 0)) { doc.objects[oid] = r; changed = true; }
     else if ((l.updatedAt || 0) > (r.updatedAt || 0)) localAhead = true;
   }
   if (Object.keys(doc.objects).some((oid) => !(oid in theirs))) localAhead = true;

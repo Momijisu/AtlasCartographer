@@ -28,7 +28,7 @@ const report = (patch) => { progress = { ...progress, ...patch }; listeners.forE
 let running = null, again = false, relist = false;
 // force: look on OneDrive for new files even if nothing suggests there are any.
 export function kick({ force = false } = {}) {
-  if (force) relist = true;
+  if (force) { relist = true; notUploaded.clear(); }
   if (running) { again = true; return running; }
   running = run().finally(() => {
     running = null;
@@ -132,19 +132,32 @@ export async function markAllUnsent() {
   await db.putMany('assetState', recs);
 }
 
-// Deleted assets: remove their files from OneDrive (any device may do it; a
-// 404 just means another one already did).
+// Deleted assets: the device that deleted them removes their files from
+// OneDrive (deletePack marks them pending); a 404 just means they were
+// already gone. Other devices only note that the deletion has been seen,
+// without a request each, so a device that merely hears about a deletion
+// can't remove files that were put back since.
 async function purge() {
   const states = await A.allStates();
-  const gone = [...A.assets.values()].filter((a) => a.deleted && !states.get(a.id)?.purged && !waiting(states.get(a.id)));
-  const failed = await pool(gone, async (a) => {
+  const tombs = [...A.assets.values()].filter((a) => a.deleted && !states.get(a.id)?.purged);
+  const pending = tombs.filter((a) => states.get(a.id)?.purgePending && !waiting(states.get(a.id)));
+  const seen = tombs.filter((a) => !states.get(a.id)?.purgePending);
+  // Art that came back (imported again) is no longer to be removed.
+  const back = [...states.values()].filter((s) => s.purgePending && A.asset(s.id));
+  if (seen.length || back.length) {
+    await db.putMany('assetState', [
+      ...seen.map((a) => ({ ...(states.get(a.id) || { id: a.id, dlOnly: true }), purged: true })),
+      ...back.map((s) => ({ ...s, purgePending: false })),
+    ]);
+  }
+  const failed = await pool(pending, async (a) => {
     try {
       for (const path of [assetPath(a), thumbPath(a.id)]) {
         const res = await patient(() => auth.graph(`${ROOT}/${path}`, { method: 'DELETE' }));
         if (res.status !== 404) await ok(res, 'Deleting from OneDrive');
       }
     } catch (e) { await noteFailure(states, a.id, e); throw e; }
-    await A.putState({ ...cleared(states.get(a.id) || { id: a.id }), purged: true });
+    await A.putState({ ...cleared(states.get(a.id)), purged: true, purgePending: false });
   });
   return failed.map((f) => f.error);
 }
@@ -244,7 +257,16 @@ async function download(force) {
 }
 
 // Full-size art for one asset: from this device, or downloaded (and kept).
+// A map can ask for hundreds at once, so only a few downloads run at a time,
+// and an asset OneDrive doesn't have yet isn't asked about again for a minute.
 const inflight = new Map();
+const notUploaded = new Map(); // id → when to ask again
+const NOT_YET = 60e3;
+let free = 4;
+const waiters = [];
+const take = () => (free > 0 ? (free--, Promise.resolve()) : new Promise((r) => waiters.push(r)));
+const give = () => { const next = waiters.shift(); if (next) next(); else free++; };
+
 export function getAssetBlob(id) {
   if (inflight.has(id)) return inflight.get(id);
   const p = (async () => {
@@ -252,12 +274,16 @@ export function getAssetBlob(id) {
     if (local) return local;
     const a = A.asset(id);
     if (!a || !auth.isSignedIn()) return null;
-    const res = await patient(() => auth.graph(`${ROOT}/${assetPath(a)}`));
-    if (res.status === 404) return null; // not uploaded yet
-    const item = await (await ok(res, 'Reading ' + a.name)).json();
-    const blob = new Blob([await fetchBlob(item['@microsoft.graph.downloadUrl'], a.name)], { type: a.type });
-    await A.putBlob(id, blob);
-    return blob;
+    if ((notUploaded.get(id) || 0) > Date.now()) return null;
+    await take();
+    try {
+      const res = await patient(() => auth.graph(`${ROOT}/${assetPath(a)}`));
+      if (res.status === 404) { notUploaded.set(id, Date.now() + NOT_YET); return null; } // not uploaded yet
+      const item = await (await ok(res, 'Reading ' + a.name)).json();
+      const blob = new Blob([await fetchBlob(item['@microsoft.graph.downloadUrl'], a.name)], { type: a.type });
+      await A.putBlob(id, blob);
+      return blob;
+    } finally { give(); }
   })().finally(() => inflight.delete(id));
   inflight.set(id, p);
   return p;

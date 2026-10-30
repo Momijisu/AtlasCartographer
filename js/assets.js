@@ -20,6 +20,7 @@ let version = 0;
 export const catalogueVersion = () => version;
 
 export async function loadAssets() {
+  version++;
   assets.clear();
   for (const a of await db.getAll('assets')) assets.set(a.id, a);
 }
@@ -41,7 +42,42 @@ const guessKind = (category) => (/textur|tile|pattern|fill|ground/i.test(categor
 // can show a map's own kind of art first. Packs start as 'any'.
 export const PACK_TYPES = [['any', 'Any map'], ['world', 'World maps'], ['region', 'Region maps'], ['city', 'City maps'], ['battlemap', 'Battlemaps']];
 
+// Names in the order people expect: "tree 2" before "tree 10". One collator
+// does this far faster than localeCompare with options on every comparison.
+const collator = new Intl.Collator(undefined, { numeric: true });
+export const byName = (a, b) => collator.compare(a.name, b.name);
+
+// The live assets of each category, found once per change of the catalogue
+// (and sorted when a category is first looked at), not on every redraw of a
+// list. Thousands of assets in hundreds of categories would otherwise be
+// searched once per category each time.
+const memo = { at: -1, packs: null, groups: null, sorted: new Map() };
+function fresh() {
+  if (memo.at === version) return;
+  memo.at = version;
+  memo.packs = null;
+  memo.sorted.clear();
+  memo.groups = new Map();
+  for (const a of liveAssets()) {
+    const key = `${a.pack}\u0000${a.category}`;
+    const list = memo.groups.get(key);
+    if (list) list.push(a); else memo.groups.set(key, [a]);
+  }
+}
+export function categoryAssets(pack, category) {
+  fresh();
+  const key = `${pack}\u0000${category}`;
+  let list = memo.sorted.get(key);
+  if (!list) memo.sorted.set(key, list = (memo.groups.get(key) || []).slice().sort(byName));
+  return list;
+}
+
 export function packs() {
+  fresh();
+  return memo.packs ??= buildPacks();
+}
+
+function buildPacks() {
   const by = new Map();
   for (const a of liveAssets()) {
     let p = by.get(a.pack);
@@ -52,8 +88,8 @@ export function packs() {
     c.count++;
     p.cats.set(a.category, c);
   }
-  return [...by.values()].sort((a, b) => a.name.localeCompare(b.name)).map((p) => ({
-    ...p, categories: [...p.cats.values()].sort((a, b) => a.name.localeCompare(b.name)),
+  return [...by.values()].sort((x, y) => collator.compare(x.name, y.name)).map((p) => ({
+    ...p, categories: [...p.cats.values()].sort((x, y) => collator.compare(x.name, y.name)),
   }));
 }
 
@@ -62,8 +98,8 @@ const stamp = (rec) => { rec.updatedAt = Math.max(Date.now(), (assets.get(rec.id
 async function saveRecords(recs) {
   if (!recs.length) return;
   for (const r of recs) assets.set(r.id, stamp(r));
-  await db.putMany('assets', recs);
   version++;
+  await db.putMany('assets', recs);
   await saveMeta({ assetRev: meta.assetRev + 1 }, { bump: ['assetRev'] });
   notify({ local: true, store: 'assets' });
 }
@@ -73,6 +109,9 @@ export async function deletePack(name) {
   // Tombstones keep the type: it names the file to remove from OneDrive.
   await saveRecords(gone.map((a) => ({ id: a.id, type: a.type, deleted: true })));
   await dropLocal(gone.map((a) => a.id));
+  // This device is the one to remove their files from OneDrive (see assetsync.js).
+  const states = await allStates();
+  await db.putMany('assetState', gone.map((a) => ({ ...cleared(states.get(a.id) || { id: a.id }), purgePending: true, purged: false })));
   await saveMeta({ pinned: meta.pinned.filter((p) => p !== name) });
 }
 
@@ -103,9 +142,10 @@ export async function mergeAssets(remote) {
   }
   if ([...assets.keys()].some((id) => !seen.has(id))) localAhead = true;
   for (const r of incoming) assets.set(r.id, r);
+  if (incoming.length) version++;
   await db.putMany('assets', incoming);
   await dropLocal(incoming.filter((r) => r.deleted).map((r) => r.id));
-  if (incoming.length) { version++; notify({ local: false, store: 'assets' }); }
+  if (incoming.length) notify({ local: false, store: 'assets' });
   return localAhead;
 }
 
@@ -134,6 +174,7 @@ export const blobIds = async () => new Set(await db.getAllKeys('blobs'));
 export const thumbIds = async () => new Set(await db.getAllKeys('thumbs'));
 export const getState = async (id) => (await db.get('assetState', id)) || { id };
 export const putState = (rec) => db.put('assetState', rec);
+const cleared = ({ failCount, nextTry, lastError, purged, ...s }) => s;
 export const allStates = async () => new Map((await db.getAll('assetState')).map((s) => [s.id, s]));
 
 async function dropLocal(ids) {
@@ -188,40 +229,65 @@ async function makeThumb(blob) {
 
 // entries: [{ path (inside the pack, '/'-separated), blob: () => Promise<Blob> }]
 // onProgress({ done, total, added, skipped }) is called as it goes.
+// A few images are read, hashed and shrunk at a time; their files are saved
+// together, a batch at a time, and each batch's catalogue records only after
+// its pictures are safely stored (so an interrupted import never leaves a
+// record without a picture).
+const IMPORT_WIDE = 3;
+const IMPORT_BATCH = 50;
 export async function importEntries(entries, pack, onProgress = () => {}) {
   const list = entries.filter((e) => isImagePath(e.path));
   const progress = { done: 0, total: list.length, added: 0, skipped: 0 };
-  let batch = [];
-  const seen = new Set();
+  const seen = new Set(); // ids taken by this import, before they are in the catalogue
   // Images added to an existing pack take on what it's made for.
   const mapType = packs().find((p) => p.name === pack)?.type;
-  for (const e of list) {
-    try {
-      const raw = await e.blob();
-      const type = TYPE_OF[extOf(e.path)];
-      const blob = raw.type === type ? raw : new Blob([raw], { type });
-      const id = await hash(blob);
-      if (asset(id) || seen.has(id)) { progress.skipped++; continue; }
-      seen.add(id);
-      const { thumb, w, h } = await makeThumb(blob);
-      await putBlob(id, blob);
-      await putThumb(id, thumb);
-      await putState({ id }); // not uploaded yet (also after a re-import of a deleted asset)
-      const parts = e.path.split('/');
-      const file = parts.pop();
-      const category = parts.join('/');
-      batch.push({ id, name: file.replace(/\.[^.]+$/, ''), pack, category, kind: guessKind(category), type, size: blob.size, w, h, ...(mapType && mapType !== 'any' ? { mapType } : {}) });
-      progress.added++;
-      // Save as we go, so an interrupted import keeps what it finished.
-      if (batch.length >= 100) { await saveRecords(batch); batch = []; }
-    } catch (err) {
-      console.warn('Skipped', e.path, err);
-      progress.skipped++;
-    } finally {
-      progress.done++;
-      onProgress(progress);
+  let ready = [];
+  let saving = Promise.resolve();
+  const flush = () => {
+    const batch = ready;
+    ready = [];
+    if (!batch.length) return saving;
+    return saving = saving.then(async () => {
+      await db.tx(['blobs', 'thumbs', 'assetState'], ({ put }) => {
+        for (const b of batch) {
+          put('blobs', { id: b.rec.id, blob: b.blob });
+          put('thumbs', { id: b.rec.id, blob: b.thumb });
+          put('assetState', { id: b.rec.id }); // not uploaded yet (also after a re-import of a deleted asset)
+        }
+      });
+      await saveRecords(batch.map((b) => b.rec));
+    });
+  };
+  let next = 0;
+  const worker = async () => {
+    while (next < list.length) {
+      const e = list[next++];
+      try {
+        const raw = await e.blob();
+        const type = TYPE_OF[extOf(e.path)];
+        const blob = raw.type === type ? raw : new Blob([raw], { type });
+        const id = await hash(blob);
+        // (No waiting between checking and taking an id, so two workers
+        // holding the same picture can't both add it.)
+        if (asset(id) || seen.has(id)) { progress.skipped++; continue; }
+        seen.add(id);
+        const { thumb, w, h } = await makeThumb(blob);
+        const parts = e.path.split('/');
+        const file = parts.pop();
+        const category = parts.join('/');
+        ready.push({ blob, thumb, rec: { id, name: file.replace(/\.[^.]+$/, ''), pack, category, kind: guessKind(category), type, size: blob.size, w, h, ...(mapType && mapType !== 'any' ? { mapType } : {}) } });
+        progress.added++;
+      } catch (err) {
+        console.warn('Skipped', e.path, err);
+        progress.skipped++;
+      } finally {
+        progress.done++;
+        onProgress(progress);
+      }
+      if (ready.length >= IMPORT_BATCH) await flush();
     }
-  }
-  await saveRecords(batch);
+  };
+  await Promise.all(Array.from({ length: Math.min(IMPORT_WIDE, list.length) }, worker));
+  await flush();
   return progress;
 }

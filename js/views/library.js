@@ -177,7 +177,7 @@ export async function viewPack(view, name) {
   const fill = (d) => {
     const grid = $('.asset-grid', d);
     if (grid.childElementCount) return;
-    grid.innerHTML = byCat.get(d.dataset.cat).sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }))
+    grid.innerHTML = byCat.get(d.dataset.cat).sort(A.byName)
       .map((a) => `<div class="tile" data-id="${a.id}" title="${esc(a.name)} · ${a.w}×${a.h}">${icon('image')}</div>`).join('');
     for (const t of grid.children) io.observe(t);
   };

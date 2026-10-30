@@ -269,7 +269,16 @@ export function start() {
   sync();
 }
 
-function debounceSync(ms) {
-  let t;
-  return () => { clearTimeout(t); t = setTimeout(sync, ms); };
+// Waits for edits to stop for a while before syncing, but not past a cap, so
+// continuous work still syncs now and then. Longer while a map is open in the
+// editor, where strokes come in bursts and each sync uploads the whole drawing.
+function debounceSync(ms, editingMs = 8000, capMs = 60000) {
+  let t, since = 0;
+  return () => {
+    const now = Date.now();
+    if (!t) since = now;
+    clearTimeout(t);
+    const wait = document.body.classList.contains('editing') ? editingMs : ms;
+    t = setTimeout(() => { t = 0; sync(); }, Math.max(0, Math.min(wait, since + capMs - now)));
+  };
 }

@@ -105,3 +105,22 @@ export async function update(store, key, fn) {
   try { await done(t); } catch (e) { throw failure || e; }
   return out;
 }
+
+// Several reads and writes across stores in one transaction: all happen or
+// none do. fn gets { get(store, key, then), put(store, value) }; then(record)
+// runs when a read comes back and may call put again. A throw anywhere rolls
+// everything back and reaches the caller.
+export async function tx(stores, fn) {
+  const t = (await open()).transaction(stores, 'readwrite');
+  let failure;
+  const guard = (f) => { try { f(); } catch (e) { failure = e; t.abort(); } };
+  const api = {
+    get(store, key, then) {
+      const r = t.objectStore(store).get(key);
+      r.onsuccess = () => guard(() => then(r.result));
+    },
+    put(store, value) { t.objectStore(store).put(value); },
+  };
+  guard(() => fn(api));
+  try { await done(t); } catch (e) { throw failure || e; }
+}

@@ -9,7 +9,7 @@ import * as images from '../images.js';
 import { $, $$, esc, uid, toast, modal } from '../util.js';
 import { icon } from '../icons.js';
 import { setTitle, state } from '../ui.js';
-import { drawDoc, drawStroke, strokePath, docStyle, STYLE, editorLandScale, labelBox, drawLabel, FONTS, fontCSS, mapStyle, texturePattern, drawPath, PATHS, docLayers, layerResolver, kindLayer, LAND_LAYER, BUILTIN_LAYERS, samplePath, pointsBox, simplify, landNeedsRefresh, refreshLand } from '../render.js';
+import { drawDoc, drawStroke, strokePath, docStyle, STYLE, editorLandScale, labelBox, drawLabel, FONTS, fontCSS, mapStyle, texturePattern, drawPath, PATHS, docLayers, layerResolver, kindLayer, LAND_LAYER, BUILTIN_LAYERS, samplePath, pointsBox, simplify, landNeedsRefresh, refreshLand, releaseLand } from '../render.js';
 import { exportDialog } from '../export.js';
 
 const INKS = ['#2b2118', '#6b4a2b', '#2f5d7c', '#3f6b3a', '#8e2f22'];
@@ -30,6 +30,8 @@ const TOOL_LAYER = { land: 'land', terrain: 'land', path: 'stroke', pen: 'stroke
 const KEYS = { h: 'pan', v: 'select', l: 'land', g: 'terrain', p: 'path', t: 'text', b: 'pen', e: 'eraser', s: 'stamp', r: 'scatter' };
 const HANDLE = 9; // screen pixels
 const ROT_OFFSET = 34;
+// Gestures whose steps change the drawing or the view (the rest only draw over it).
+const MAP_GESTURES = new Set(['pan', 'pinch', 'place', 'move', 'scale', 'rotate', 'node']); // (the eraser and scatter redraw the map themselves, when they actually change something)
 
 const load = (k, d) => { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch { return d; } };
 const keep = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* private mode */ } };
@@ -64,6 +66,7 @@ export async function viewEditor(view, id) {
   $('#exportBtn').onclick = () => exportDialog(store.project(id));
   view.innerHTML = `<div class="editor">
       <canvas class="editor-canvas"></canvas>
+      <canvas class="editor-overlay"></canvas>
       <aside class="picker" hidden></aside>
       <div class="toolrail" role="toolbar" aria-label="Tools">
         ${TOOLS.map(([t, ic, title, name]) => `<button class="tool" data-tool="${t}" data-name="${name}" data-key="${title.match(/\(([^)]*)\)$/)[1]}" aria-label="${title.replace(/ \(.*/, '')}">${icon(ic)}</button>`).join('')}
@@ -187,6 +190,12 @@ class Editor {
     this.doc = doc;
     this.canvas = root.querySelector('canvas');
     this.ctx = this.canvas.getContext('2d');
+    // The map is drawn on one canvas; what moves with the pointer (the brush
+    // outline, a stroke being drawn, the selection) on a transparent one over
+    // it, so those can change without the whole map being drawn again.
+    this.overlay = root.querySelector('.editor-overlay');
+    this.octx = this.overlay.getContext('2d');
+    this.mapDirty = true;
     this.s = 1; this.x = 0; this.y = 0; // map → screen: screen = map * s + (x, y)
     this.tool = load('ac.tool', 'pen');
     if (!TOOLS.some(([t]) => t === this.tool)) this.tool = 'pen';
@@ -215,6 +224,7 @@ class Editor {
     this.brush = load('ac.brush', []).filter((id) => A.asset(id)); // asset ids to stamp with
     this.multi = load('ac.multi', false);
     this.sel = new Set(); // selected stamps and labels
+    this.preview = new Map(); // id → object (or null: hidden) as a gesture is changing it; the drawing itself changes when the gesture is committed
     this.undoStack = []; this.redoStack = [];
     this.pointers = new Map();
     this.gesture = null;
@@ -233,6 +243,7 @@ class Editor {
 
   destroy() {
     this.destroyed = true;
+    releaseLand(this.project.id);
     this.disposers.forEach((d) => d());
     cancelAnimationFrame(this.raf);
     clearTimeout(this.refreshTimer);
@@ -281,8 +292,8 @@ class Editor {
     const r = this.canvas.getBoundingClientRect();
     const dpr = Math.min(devicePixelRatio || 1, 2);
     this.vw = r.width; this.vh = r.height; this.dpr = dpr;
-    this.canvas.width = Math.round(r.width * dpr);
-    this.canvas.height = Math.round(r.height * dpr);
+    this.canvas.width = this.overlay.width = Math.round(r.width * dpr);
+    this.canvas.height = this.overlay.height = Math.round(r.height * dpr);
     this.redraw();
   }
 
@@ -316,24 +327,47 @@ class Editor {
 
   // --- drawing ----------------------------------------------------------
 
+  // The map needs drawing again (the drawing, the view or a picture changed)...
   redraw() {
+    this.mapDirty = true;
+    this.schedule();
+  }
+
+  // ...or only what's over it.
+  redrawOverlay() {
+    this.schedule();
+  }
+
+  schedule() {
     cancelAnimationFrame(this.raf);
     this.raf = requestAnimationFrame(() => this.paint());
   }
 
+  // After a gesture step: the map changes only if the gesture changes the
+  // drawing or the view.
+  gestureRedraw() {
+    if (!this.gesture || MAP_GESTURES.has(this.gesture.kind)) this.redraw(); else this.redrawOverlay();
+  }
+
   // One frame going wrong (say, a canvas the device can't give us) shouldn't
   // end the drawing: the error is logged once per kind, and the next change
-  // starts a fresh frame on a canvas reset to its defaults.
+  // starts a fresh frame on canvases reset to their defaults.
   paint() {
     try {
-      this.paintFrame();
+      if (this.mapDirty) this.paintMap();
+      this.mapDirty = false;
+      this.paintOverlay();
       this.paintError = null;
       this.scheduleLandRefresh();
     } catch (e) {
       if (e.message !== this.paintError) console.error('Drawing a frame failed', e);
       this.paintError = e.message;
-      this.canvas.width = this.canvas.width; // clears it and drops any half-done state
+      this.canvas.width = this.canvas.width; // clears them and drops any half-done state
+      this.overlay.width = this.overlay.width;
+      this.mapDirty = true;
     }
+    const zoom = (this.zoomEl ??= $('.zoom-pct', this.root)), pct = `${Math.round(this.s * 100)}%`;
+    if (zoom.textContent !== pct) zoom.textContent = pct;
   }
 
   // The land layer is patched stroke by stroke, which drifts by a shade now
@@ -354,7 +388,7 @@ class Editor {
     }, 1600);
   }
 
-  paintFrame() {
+  paintMap() {
     const { ctx, dpr } = this;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
@@ -368,7 +402,20 @@ class Editor {
     ctx.beginPath();
     ctx.rect(0, 0, this.project.width, this.project.height);
     ctx.clip();
-    drawDoc(ctx, this.project, this.doc, { image: (id) => images.get(id), placeholder: true, landScale: this.landScale() });
+    const [x0, y0] = this.toMap(0, 0), [x1, y1] = this.toMap(this.vw, this.vh);
+    drawDoc(ctx, this.project, this.doc, { image: (id) => images.get(id), placeholder: true, landScale: this.landScale(), view: [x0, y0, x1, y1], overlay: this.preview });
+    ctx.restore();
+  }
+
+  paintOverlay() {
+    const { octx: ctx, dpr } = this;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, this.overlay.width, this.overlay.height);
+    ctx.setTransform(this.s * dpr, 0, 0, this.s * dpr, this.x * dpr, this.y * dpr);
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, 0, this.project.width, this.project.height);
+    ctx.clip();
     const g = this.gesture;
     if (g?.kind === 'draw') drawStroke(ctx, g.stroke);
     if (g?.kind === 'path') drawPath(ctx, g.stroke, mapStyle(this.doc));
@@ -402,8 +449,6 @@ class Editor {
       ctx.setLineDash([]);
     }
     this.paintBrushPreview();
-    const zoom = (this.zoomEl ??= $('.zoom-pct', this.root)), pct = `${Math.round(this.s * 100)}%`;
-    if (zoom.textContent !== pct) zoom.textContent = pct;
   }
 
   // What the current brush will paint, at its size: under the mouse, and for
@@ -418,7 +463,7 @@ class Editor {
     const tool = this.tool;
     const size = { pen: this.width, eraser: Math.max(this.width, 12 / this.s), land: this.landSize, terrain: this.terrainSize, path: this.pathWidth, stamp: this.stampSize, scatter: this.stampSize }[tool];
     if (!size) return;
-    const { ctx, dpr } = this;
+    const { octx: ctx, dpr } = this;
     const [mx, my] = at;
     ctx.save();
     ctx.setTransform(this.s * dpr, 0, 0, this.s * dpr, this.x * dpr, this.y * dpr);
@@ -460,15 +505,15 @@ class Editor {
   // A size was just changed: show it, then let the preview fade with time.
   flashSize() {
     this.sizeFlash = performance.now();
-    this.redraw();
+    this.redrawOverlay();
     clearTimeout(this.flashTimer);
-    this.flashTimer = setTimeout(() => this.redraw(), 950);
+    this.flashTimer = setTimeout(() => this.redrawOverlay(), 950);
   }
 
   // A path (or text on a path): its points, to drag, and a small "+" between
   // each pair, to drag out a new point.
   paintNodes(o) {
-    const { ctx, dpr } = this;
+    const { octx: ctx, dpr } = this;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     const { nodes, mids } = this.nodes(o);
     ctx.strokeStyle = '#c4553b';
@@ -498,7 +543,7 @@ class Editor {
 
   // Just the dashed box, for each item of a multiple selection.
   paintOutline(o) {
-    const { ctx, dpr } = this;
+    const { octx: ctx, dpr } = this;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     const c = this.corners(o).map((p) => this.toScreen(...p));
     ctx.strokeStyle = '#c4553b';
@@ -514,7 +559,7 @@ class Editor {
   // Selection outline with corner handles (scale) and a handle above (rotate).
   paintSelection(o) {
     if (ptsKey(o)) { this.paintNodes(o); return; }
-    const { ctx, dpr } = this;
+    const { octx: ctx, dpr } = this;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     const c = this.corners(o).map((p) => this.toScreen(...p));
     const rh = this.rotHandle(o);
@@ -539,10 +584,31 @@ class Editor {
   selectedObjs() {
     const out = [];
     for (const id of this.sel) {
-      const o = this.doc.objects[id];
-      if (o && !o.deleted) out.push(o); else this.sel.delete(id);
+      const o = this.get(id);
+      if (o) out.push(o); else this.sel.delete(id);
     }
     return out;
+  }
+
+  // An object as it looks now, mid-gesture changes included (undefined if it's gone).
+  get(id) {
+    const o = this.preview.has(id) ? this.preview.get(id) : this.doc.objects[id];
+    return o && !o.deleted ? o : undefined;
+  }
+
+  // Every live object as it looks now.
+  live() {
+    const out = [];
+    for (const o of Object.values(this.doc.objects)) if (!o.deleted && !this.preview.has(o.id)) out.push(o);
+    for (const o of this.preview.values()) if (o && !o.deleted) out.push(o);
+    return out;
+  }
+
+  // (object) → can it be picked and changed? For many objects in one go: the
+  // layers are worked out once, not for each object.
+  editableOf() {
+    const lay = layerResolver(this.doc), hidden = this.hidden();
+    return (o) => { const k = lay(o); return !hidden.has(k) && !this.locked.has(k); };
   }
 
   // The selected object when exactly one is selected.
@@ -550,7 +616,7 @@ class Editor {
 
   select(ids) { this.sel = new Set(ids); }
 
-  selectable() { return store.liveObjects(this.doc).filter((o) => SELECTABLE.includes(o.kind) && this.editable(this.lay(o))); }
+  selectable() { const ok = this.editableOf(); return this.live().filter((o) => SELECTABLE.includes(o.kind) && ok(o)); }
 
   // Stamps and labels can be selected and transformed; this is their box.
   box(o) {
@@ -593,7 +659,8 @@ class Editor {
     // Whatever draws on top is found first: labels, then by layer, then z.
     const pos = new Map(this.layers().map((l, i, a) => [l.id, a.length - i]));
     const rank = (o) => (o.kind === 'label' ? 1e15 : 0) + (pos.get(this.lay(o)) || 0) * 1e12 + (o.z || 0);
-    const list = store.liveObjects(this.doc).filter((o) => kinds.includes(o.kind) && this.editable(this.lay(o))).sort((a, b) => rank(b) - rank(a));
+    const ok = this.editableOf();
+    const list = this.live().filter((o) => kinds.includes(o.kind) && ok(o)).sort((a, b) => rank(b) - rank(a));
     return list.find((o) => this.hitTest(o, mx, my)) || null;
   }
 
@@ -667,7 +734,7 @@ class Editor {
 
   zRange() {
     let lo = 0, hi = 0;
-    for (const o of Object.values(this.doc.objects)) if (!o.deleted) { lo = Math.min(lo, o.z || 0); hi = Math.max(hi, o.z || 0); }
+    for (const o of this.live()) { lo = Math.min(lo, o.z || 0); hi = Math.max(hi, o.z || 0); }
     return [lo, hi];
   }
   nextZ() { return this.zRange()[1] + 1; }
@@ -732,9 +799,9 @@ class Editor {
 
   // Strokes and stamps under a point, within the eraser's radius (map pixels).
   hits([mx, my], radius) {
-    const out = [];
-    for (const o of store.liveObjects(this.doc)) {
-      if (!this.editable(this.lay(o))) continue;
+    const out = [], ok = this.editableOf();
+    for (const o of this.live()) {
+      if (!ok(o)) continue;
       if (o.kind === 'stamp' || o.kind === 'label') { if (this.inBox(o, mx, my, radius)) out.push(o); continue; }
       if (o.kind !== 'stroke' && o.kind !== 'path') continue;
       const p = o.points, r = radius + o.width / 2;
@@ -754,7 +821,7 @@ class Editor {
     if (t !== 'select') this.sel.clear();
     if ((t === 'stamp' || t === 'scatter') && !this.brush.length) this.openPicker();
     this.syncToolbar();
-    this.redraw();
+    this.redrawOverlay();
   }
 
   syncToolbar() {
@@ -826,8 +893,8 @@ class Editor {
   }
 
   // Turn the next stamp by deg (clockwise), within one full turn.
-  turnStamp(deg) { this.stampRot = (((this.stampRot + deg) % 360) + 360) % 360; this.syncToolbar(); this.redraw(); }
-  flipStamp() { this.stampFlip = !this.stampFlip; this.syncToolbar(); this.redraw(); }
+  turnStamp(deg) { this.stampRot = (((this.stampRot + deg) % 360) + 360) % 360; this.syncToolbar(); this.redrawOverlay(); }
+  flipStamp() { this.stampFlip = !this.stampFlip; this.syncToolbar(); this.redrawOverlay(); }
 
   async renderChip() {
     const chip = $('[data-act="picker"]', this.root);
@@ -903,7 +970,7 @@ class Editor {
     if (lock) this.locked.add(kind); else this.locked.delete(kind);
     keep(`ac.locked.${this.project.id}`, [...this.locked]);
     if (lock) for (const o of this.selectedObjs()) if (this.lay(o) === kind) this.sel.delete(o.id);
-    this.renderLayers(); this.syncToolbar(); this.redraw();
+    this.renderLayers(); this.syncToolbar(); this.redrawOverlay();
   }
 
   lay(o) { return layerResolver(this.doc)(o); }
@@ -1159,19 +1226,27 @@ class Editor {
     const rank = (p) => (p.type === mt && mt !== 'any' ? 0 : p.type === 'any' ? 1 : 2);
     packs.sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
     const order = new Map(packs.map((p, i) => [p.name, i]));
-    const byName = (a, b) => a.name.localeCompare(b.name, undefined, { numeric: true });
+    const byName = A.byName;
     const open = this.pickOpen(kind);
     const query = (this.pickQuery || '').trim().toLowerCase();
     const tile = (a, cls = '') => {
       const url = A.cachedThumbURL(a.id);
       return `<button class="tile${cls}" data-id="${a.id}" aria-label="${esc(a.name)}">${url ? `<img src="${url}" alt="" draggable="false">` : icon('image')}</button>`;
     };
-    const grid = (list) => `<div class="pk-grid">${list.map((a) => tile(a)).join('')}</div>`;
+    // A long category shows its first tiles; the rest come on request (a
+    // category can hold thousands, and every tile is a button and a picture).
+    const SHOWN = 120;
+    const grid = (list, key) => {
+      const more = list.length > SHOWN && !this.pickAll.has(key);
+      return `<div class="pk-grid">${(more ? list.slice(0, SHOWN) : list).map((a) => tile(a)).join('')}</div>`
+        + (more ? `<div class="pk-actions"><button class="btn small quiet" data-showall="${esc(key)}">Show all ${list.length.toLocaleString()}</button></div>` : '');
+    };
     const catHead = (key, label, count, isOpen, all = true) => `<div class="pk-cat-head" data-toggle="${esc(key)}">
         <span class="pk-caret">${icon(isOpen ? 'caret-down' : 'caret-right')}</span><span class="pk-cat-name">${esc(label)}</span><span class="muted small">${count}</span>
         ${all && !tex ? `<button class="btn small quiet" data-all="${esc(key)}" title="Stamp with any of these">Use all</button>` : ''}</div>`;
     let body = '';
     this.pickLists = new Map(); // section key → its assets, for "Use all"
+    this.pickAll ??= new Set(); // long categories shown in full
     if (query) {
       const words = query.split(/\s+/);
       const hits = A.liveAssets().filter((a) => a.kind === kind && order.has(a.pack)
@@ -1184,13 +1259,13 @@ class Editor {
         groups.get(key).push(a);
       }
       body = `<p class="muted small pk-found">${hits.length === 300 ? 'First 300 matches' : `${hits.length} ${hits.length === 1 ? 'match' : 'matches'}`}</p>`
-        + [...groups].map(([key, list]) => { this.pickLists.set(key, list); const [pk, ct] = key.split(SEP); return `<section class="pk-section">${catHead(key, `${pk} · ${ct || 'General'}`, list.length, true)}${grid(list)}</section>`; }).join('');
+        + [...groups].map(([key, list]) => { this.pickLists.set(key, list); const [pk, ct] = key.split(SEP); return `<section class="pk-section">${catHead(key, `${pk} · ${ct || 'General'}`, list.length, true)}${grid(list, key)}</section>`; }).join('');
     } else {
       const rec = recent(kind).map((id) => A.asset(id)).filter((a) => a && a.kind === kind).slice(0, 24);
       if (rec.length) {
         this.pickLists.set(RECENT, rec);
         const isOpen = !open.has(`${RECENT}:closed`);
-        body += `<section class="pk-section">${catHead(RECENT, 'Recently used', rec.length, isOpen)}${isOpen ? grid(rec) : ''}</section>`;
+        body += `<section class="pk-section">${catHead(RECENT, 'Recently used', rec.length, isOpen)}${isOpen ? grid(rec, RECENT) : ''}</section>`;
       }
       for (const p of packs) {
         const packOpen = !open.has(`${p.name}:closed`);
@@ -1200,12 +1275,12 @@ class Editor {
         if (packOpen) {
           for (const c of p.categories) {
             const key = `${p.name}${SEP}${c.name}`;
-            const list = A.liveAssets().filter((a) => a.pack === p.name && a.category === c.name).sort(byName);
+            const list = A.categoryAssets(p.name, c.name);
             this.pickLists.set(key, list);
             const isOpen = open.has(key);
             // Closed, a category shows a strip of its first pictures.
             body += `<section class="pk-section">${catHead(key, c.name || 'General', list.length, isOpen)}
-              ${isOpen ? grid(list) : `<div class="pk-strip">${list.slice(0, 6).map((a) => tile(a, ' mini')).join('')}${list.length > 6 ? `<button class="pk-more" data-toggle="${esc(key)}">+${list.length - 6}</button>` : ''}</div>`}</section>`;
+              ${isOpen ? grid(list, key) : `<div class="pk-strip">${list.slice(0, 6).map((a) => tile(a, ' mini')).join('')}${list.length > 6 ? `<button class="pk-more" data-toggle="${esc(key)}">+${list.length - 6}</button>` : ''}</div>`}</section>`;
           }
         }
         body += '</section>';
@@ -1273,6 +1348,8 @@ class Editor {
     $('.pk-browse', el)?.addEventListener('click', (e) => {
       const all = e.target.closest('[data-all]');
       if (all) { e.stopPropagation(); this.setBrush((this.pickLists.get(all.dataset.all) || []).map((a) => a.id)); return; }
+      const showAll = e.target.closest('[data-showall]');
+      if (showAll) { this.pickAll.add(showAll.dataset.showall); this.renderPicker(); return; }
       const t = e.target.closest('.tile');
       if (t) {
         const id = t.dataset.id;
@@ -1296,7 +1373,8 @@ class Editor {
       }
     });
     // Thumbnails not loaded yet arrive as they scroll into view.
-    const io = new IntersectionObserver((entries) => {
+    this.pickIO?.disconnect();
+    const io = this.pickIO = new IntersectionObserver((entries) => {
       for (const en of entries) if (en.isIntersecting) {
         io.unobserve(en.target);
         A.thumbURL(en.target.dataset.id).then((url) => { if (url) en.target.innerHTML = `<img src="${url}" alt="" draggable="false">`; });
@@ -1467,10 +1545,10 @@ class Editor {
     this.on(c, 'pointerdown', (e) => this.down(e));
     this.on(c, 'pointermove', (e) => {
       // The mouse's position, for the brush preview (touch has no hover).
-      if (e.pointerType === 'mouse') { this.hover = this.toMap(...this.local(e)); if (!this.pointers.size) this.redraw(); }
+      if (e.pointerType === 'mouse') { this.hover = this.toMap(...this.local(e)); if (!this.pointers.size) this.redrawOverlay(); }
       this.move(e);
     });
-    this.on(c, 'pointerleave', () => { this.hover = null; this.redraw(); });
+    this.on(c, 'pointerleave', () => { this.hover = null; this.redrawOverlay(); });
     this.on(c, 'pointerup', (e) => this.up(e));
     this.on(c, 'pointercancel', (e) => this.up(e, true));
     this.on(c, 'contextmenu', (e) => e.preventDefault());
@@ -1510,7 +1588,7 @@ class Editor {
     if (mod && k === 'x') { if (this.copySelected()) { e.preventDefault(); this.deleteSelected(); } return; }
     if (mod && k === 'v') { if (clipboard?.length) { e.preventDefault(); this.paste(); } return; }
     if (mod && k === 'd') { e.preventDefault(); this.duplicateSelected(); return; }
-    if (mod && k === 'a') { e.preventDefault(); this.select(this.selectable().map((o) => o.id)); if (this.tool !== 'select') this.setTool('select'); this.syncToolbar(); this.redraw(); return; }
+    if (mod && k === 'a') { e.preventDefault(); this.select(this.selectable().map((o) => o.id)); if (this.tool !== 'select') this.setTool('select'); this.syncToolbar(); this.redrawOverlay(); return; }
     // Everything saves as you go; don't let the browser offer to save the page.
     if (mod && k === 's') { e.preventDefault(); toast('Saved: every change is kept as you make it'); return; }
     if (mod) return;
@@ -1536,7 +1614,7 @@ class Editor {
     }
     // Escape first drops whatever is half done (a stroke, a box, a move).
     if (e.key === 'Escape' && this.gesture && this.gesture.kind !== 'pinch') { this.restore(this.gesture); this.gesture = null; this.pointers.clear(); this.syncToolbar(); this.redraw(); return; }
-    if (e.key === 'Escape') { this.sel.clear(); this.closePanels(); this.syncToolbar(); this.redraw(); return; }
+    if (e.key === 'Escape') { this.sel.clear(); this.closePanels(); this.syncToolbar(); this.redrawOverlay(); return; }
     if (KEYS[k]) this.setTool(KEYS[k]);
     else if (k === '0') this.fit();
     else if (k === '+' || k === '=') this.zoomAt(this.vw / 2, this.vh / 2, 1.25);
@@ -1613,7 +1691,7 @@ class Editor {
       const o = this.newStamp(mx, my, this.stampSize, { flip: this.stampFlip, rot: this.stampRot * Math.PI / 180 });
       if (!o) { this.openPicker(); toast('Choose some art first'); return; }
       o.z = this.nextZ();
-      this.doc.objects[o.id] = o;
+      this.preview.set(o.id, o);
       this.gesture = { kind: 'place', id: o.id, from: [mx, my], orig: { ...o } };
     } else if (this.tool === 'scatter') {
       if (!this.brush.some((id) => A.asset(id))) { this.openPicker(); toast('Choose some art first'); return; }
@@ -1621,7 +1699,8 @@ class Editor {
       this.scatterAt(mx, my);
     }
     this.syncToolbar();
-    this.redraw();
+    // Starting most gestures changes nothing yet; these ones do (or the view moves).
+    if (!this.gesture || ['pan', 'place', 'node'].includes(this.gesture.kind)) this.redraw(); else this.redrawOverlay();
   }
 
   // Grab a handle of the selected item, an item under the pointer (Shift adds
@@ -1642,7 +1721,7 @@ class Editor {
       if (j >= 0) {
         const p = sel[key].slice();
         p.splice(2 * (j + 1), 0, r1(mx), r1(my));
-        this.doc.objects[sel.id] = { ...sel, [key]: p };
+        this.preview.set(sel.id, { ...sel, [key]: p });
         return { kind: 'node', id: sel.id, key, i: j + 1, orig: clean(sel), moved: true };
       }
     }
@@ -1700,9 +1779,9 @@ class Editor {
       this.eraseAt(pt);
     } else if (g.kind === 'place') {
       const o = g.orig;
-      this.doc.objects[g.id] = { ...this.doc.objects[g.id], x: r1(o.x + mx - g.from[0]), y: r1(o.y + my - g.from[1]) };
+      this.preview.set(g.id, { ...this.get(g.id), x: r1(o.x + mx - g.from[0]), y: r1(o.y + my - g.from[1]) });
     } else if (g.kind === 'move') {
-      for (const o of g.origs) this.doc.objects[o.id] = { ...this.doc.objects[o.id], ...shifted(o, mx - g.from[0], my - g.from[1]) };
+      for (const o of g.origs) this.preview.set(o.id, { ...this.get(o.id), ...shifted(o, mx - g.from[0], my - g.from[1]) });
       g.moved = true;
     } else if (g.kind === 'marquee') {
       g.b = [mx, my];
@@ -1712,27 +1791,27 @@ class Editor {
     } else if (g.kind === 'scale') {
       const o = g.orig;
       const k = Math.hypot(mx - o.x, my - o.y) / g.d0;
-      this.doc.objects[g.id] = o.kind === 'label'
-        ? { ...this.doc.objects[g.id], size: r1(Math.max(4, o.size * k)) }
-        : { ...this.doc.objects[g.id], ...((s) => ({ w: r1(o.w * s), h: r1(o.h * s) }))(Math.max(4 / Math.max(o.w, o.h), k)) };
+      this.preview.set(g.id, o.kind === 'label'
+        ? { ...this.get(g.id), size: r1(Math.max(4, o.size * k)) }
+        : { ...this.get(g.id), ...((s) => ({ w: r1(o.w * s), h: r1(o.h * s) }))(Math.max(4 / Math.max(o.w, o.h), k)) });
       g.moved = true;
     } else if (g.kind === 'rotate') {
       let rot = (g.orig.rot || 0) + Math.atan2(my - g.orig.y, mx - g.orig.x) - g.a0;
       if (e.shiftKey) rot = Math.round(rot / (Math.PI / 12)) * (Math.PI / 12); // 15° steps
-      this.doc.objects[g.id] = { ...this.doc.objects[g.id], rot: Math.round(rot * 1000) / 1000 };
+      this.preview.set(g.id, { ...this.get(g.id), rot: Math.round(rot * 1000) / 1000 });
       g.moved = true;
     } else if (g.kind === 'scatter') {
       this.scatterAt(mx, my);
     } else if (g.kind === 'node') {
-      const cur = this.doc.objects[g.id], p = cur[g.key].slice();
+      const cur = this.get(g.id), p = cur[g.key].slice();
       p[2 * g.i] = r1(mx); p[2 * g.i + 1] = r1(my);
-      this.doc.objects[g.id] = { ...cur, [g.key]: p, ...(g.key === 'along' ? { x: r1(p[0]), y: r1(p[1]) } : {}) };
+      this.preview.set(g.id, { ...cur, [g.key]: p, ...(g.key === 'along' ? { x: r1(p[0]), y: r1(p[1]) } : {}) });
       g.moved = true;
     } else if (g.kind === 'textpath') {
       const p = g.points;
       if (Math.hypot(mx - p[p.length - 2], my - p[p.length - 1]) * this.s >= 4) p.push(r1(mx), r1(my));
     }
-    this.redraw();
+    this.gestureRedraw();
   }
 
   up(e, cancelled = false) {
@@ -1756,13 +1835,13 @@ class Editor {
       for (const o of gone) this.sel.delete(o.id);
       this.commit({ undo: gone.map(clean), redo: gone.map((o) => ({ id: o.id, deleted: true })) });
     } else if (g.kind === 'place') {
-      const o = clean(this.doc.objects[g.id]);
+      const o = clean(this.get(g.id));
       useRecent('stamp', [o.asset]);
       this.commit({ undo: [{ id: o.id, deleted: true }], redo: [o] });
     } else if (g.kind === 'move' && g.moved) {
-      this.commit({ undo: g.origs, redo: g.origs.map((o) => clean(this.doc.objects[o.id])) });
+      this.commit({ undo: g.origs, redo: g.origs.map((o) => clean(this.get(o.id))) });
     } else if (g.kind === 'node' && g.moved) {
-      this.commit({ undo: [g.orig], redo: [clean(this.doc.objects[g.id])] });
+      this.commit({ undo: [g.orig], redo: [clean(this.get(g.id))] });
     } else if (g.kind === 'textpath') {
       // A click places an ordinary label; a drag, text along what was drawn.
       const p = g.points, len = p.length / 2;
@@ -1771,26 +1850,26 @@ class Editor {
       if (L * this.s < 24) this.newLabel(p[0], p[1]);
       else this.newLabel(p[0], p[1], simplify(p, 2.5 / this.s));
     } else if ((g.kind === 'scale' || g.kind === 'rotate') && g.moved) {
-      this.commit({ undo: [g.orig], redo: [clean(this.doc.objects[g.id])] });
+      this.commit({ undo: [g.orig], redo: [clean(this.get(g.id))] });
     } else if (g.kind === 'scatter' && g.placed.length) {
       // Stamps lower on the map overlap the ones behind them, like a landscape.
       const z0 = this.nextZ();
-      useRecent('stamp', [...new Set(g.placed.map((id) => this.doc.objects[id].asset))]);
-      const placed = g.placed.map((id) => this.doc.objects[id]).sort((a, b) => (a.y + a.h / 2) - (b.y + b.h / 2))
+      useRecent('stamp', [...new Set(g.placed.map((id) => this.get(id).asset))]);
+      const placed = g.placed.map((id) => this.get(id)).sort((a, b) => (a.y + a.h / 2) - (b.y + b.h / 2))
         .map((o, i) => ({ ...clean(o), z: z0 + i }));
       this.commit({ undo: placed.map((o) => ({ id: o.id, deleted: true })), redo: placed });
     }
+    // The committed objects are in the drawing by now (commit applies them at
+    // once, before anything is drawn), so the gesture's stand-ins can go.
+    this.preview.clear();
     this.syncToolbar();
-    this.redraw();
+    // The map changes if the drawing did (a click that only selected leaves it alone).
+    if (g.moved || ['draw', 'land', 'terrain', 'path', 'erase', 'place', 'scatter', 'textpath'].includes(g.kind)) this.redraw(); else this.redrawOverlay();
   }
 
-  // Put back whatever an unfinished gesture changed on screen.
-  restore(g) {
-    if (g.kind === 'place') delete this.doc.objects[g.id];
-    else if (g.kind === 'scatter') for (const id of g.placed) delete this.doc.objects[id];
-    else if (g.kind === 'erase') for (const o of g.erased.values()) this.doc.objects[o.id] = o;
-    else if (g.kind === 'move') for (const o of g.origs) this.doc.objects[o.id] = { ...this.doc.objects[o.id], ...o };
-    else if (g.kind === 'scale' || g.kind === 'rotate' || g.kind === 'node') this.doc.objects[g.id] = { ...this.doc.objects[g.id], ...g.orig };
+  // Drop whatever an unfinished gesture changed on screen: it never reached the drawing.
+  restore() {
+    this.preview.clear();
   }
 
   abandon() {
@@ -1800,6 +1879,7 @@ class Editor {
       // Erasing is committed rather than dropped: what was erased stays erased.
       this.gesture = null;
       if (g.erased.size) { const gone = [...g.erased.values()]; this.commit({ undo: gone.map(clean), redo: gone.map((o) => ({ id: o.id, deleted: true })) }); }
+      this.preview.clear();
       return;
     }
     this.restore(g);
@@ -1821,8 +1901,9 @@ class Editor {
     });
     if (!o) return;
     o.z = this.nextZ();
-    this.doc.objects[o.id] = o;
+    this.preview.set(o.id, o);
     g.placed.push(o.id);
+    this.redraw();
   }
 
   // The eraser hides strokes and stamps as it passes; they're removed for
@@ -1834,7 +1915,7 @@ class Editor {
     if (!hit.length) return;
     for (const o of hit) {
       g.erased.set(o.id, o);
-      this.doc.objects[o.id] = { ...o, deleted: true };
+      this.preview.set(o.id, null);
     }
     this.redraw();
   }
