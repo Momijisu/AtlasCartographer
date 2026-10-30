@@ -13,21 +13,26 @@ import { drawDoc, drawStroke, strokePath, docStyle, STYLE, editorLandScale, labe
 import { exportDialog } from '../export.js';
 
 const INKS = ['#2b2118', '#6b4a2b', '#2f5d7c', '#3f6b3a', '#8e2f22'];
+// In the rail's order. Scatter is the stamp tool placing many at once, so it
+// shares the stamp's button; moving the view has a button on touch screens
+// only (elsewhere it's Space, or the middle mouse button).
 const TOOLS = [
   ['pan', 'hand-pointing', 'Move the view (H, or hold Space)', 'Move'],
-  ['select', 'arrows-out-cardinal', 'Select, move, scale and rotate stamps (V)', 'Select'],
-  ['land', 'globe-hemisphere-west', 'Land and water (L)', 'Land'],
-  ['terrain', 'paint-brush', 'Terrain: paint textures onto the land (G)', 'Terrain'],
+  ['select', 'cursor', 'Select, move, scale and rotate (V)', 'Select'],
+  ['land', 'globe-hemisphere-west', 'Land and water (M)', 'Land'],
+  ['terrain', 'paint-brush', 'Brush: paint textures onto the land (B)', 'Brush'],
+  ['stamp', 'stamp', 'Stamp: place art from the library (O)', 'Stamp'],
+  ['scatter', 'stamp', 'Stamp: place many at once (O)', 'Stamp'],
+  ['path', 'path', 'Lines: roads, trails, rivers and borders (L)', 'Line'],
+  ['pen', 'pencil-line', 'Pen and colour brush (P)', 'Pen'],
   ['text', 'text-t', 'Text: click to add a label, or click one to edit it (T)', 'Text'],
-  ['path', 'path', 'Paths: roads, trails, rivers and borders (P)', 'Path'],
-  ['pen', 'pencil-line', 'Pen and colour brush (B)', 'Pen'],
-  ['eraser', 'eraser', 'Eraser (E)', 'Eraser'],
-  ['stamp', 'mountains', 'Stamp: place art from the library (S)', 'Stamp'],
-  ['scatter', 'tree-evergreen', 'Scatter: paint many stamps at once (R)', 'Scatter'],
+  ['eraser', 'eraser', 'Eraser (U)', 'Eraser'],
 ];
 // The layer each tool draws on.
 const TOOL_LAYER = { land: 'land', terrain: 'land', path: 'stroke', pen: 'stroke', stamp: 'stamp', scatter: 'stamp', text: 'label' };
-const KEYS = { h: 'pan', v: 'select', l: 'land', g: 'terrain', p: 'path', t: 'text', b: 'pen', e: 'eraser', s: 'stamp', r: 'scatter' };
+// Tool keys, as in Inkarnate where it has the tool (O picks the stamp tool
+// in whichever placing mode it was last in).
+const KEYS = { h: 'pan', v: 'select', m: 'land', b: 'terrain', o: 'stamp', l: 'path', p: 'pen', t: 'text', u: 'eraser' };
 const HANDLE = 9; // screen pixels
 const ROT_OFFSET = 34;
 // Gestures whose steps change the drawing or the view (the rest only draw over it).
@@ -69,7 +74,7 @@ export async function viewEditor(view, id) {
       <canvas class="editor-overlay"></canvas>
       <aside class="picker" hidden></aside>
       <div class="toolrail" role="toolbar" aria-label="Tools">
-        ${TOOLS.map(([t, ic, title, name]) => `<button class="tool" data-tool="${t}" data-name="${name}" data-key="${title.match(/\(([^)]*)\)$/)[1]}" aria-label="${title.replace(/ \(.*/, '')}">${icon(ic)}</button>`).join('')}
+        ${TOOLS.filter(([t]) => t !== 'scatter').map(([t, ic, title, name]) => `<button class="tool${t === 'pan' ? ' touch-only' : ''}" data-tool="${t}" data-name="${name}" data-key="${title.match(/\(([^)]*)\)$/)[1]}" aria-label="${title.replace(/ \(.*/, '')}">${icon(ic)}</button>`).join('')}
       </div>
       <div class="ro-banner" role="status" hidden>This map is open in another window. Close it there to edit here.</div>
       <div class="save-banner" role="alert" hidden></div>
@@ -80,32 +85,34 @@ export async function viewEditor(view, id) {
         <span class="tb-name"></span><span class="tb-sep"></span>
         <span class="tb-group" data-for="land">
           <span class="seg land-mode"><button type="button" data-landmode="add" title="Paint land (X swaps; hold Alt for one water stroke)">Land</button><button type="button" data-landmode="erase" title="Paint water (X swaps)">Water</button></span>
-          ${opt('Size', 'landSize', '<input type="range" class="land-size" min="0" max="100" step="1" title="Brush size ([ and ])" aria-label="Land brush size">')}
+          ${opt('Size', 'landSize', '<input type="range" class="land-size" min="0" max="100" step="1" title="Brush size (W and S)" aria-label="Land brush size">')}
           <button class="brush-chip texture-chip" data-act="textures" title="Land texture" aria-label="Land texture"></button>
         </span>
         <span class="tb-group" data-for="terrain">
           <button class="brush-chip terrain-chip" data-act="terrain-picker" title="Texture to paint" aria-label="Texture to paint"></button>
-          ${opt('Size', 'terrainSize', '<input type="range" class="terrain-size" min="0" max="100" step="1" title="Brush size ([ and ])" aria-label="Terrain brush size">')}
-          ${opt('Soft', 'terrainSoft', '<input type="range" class="terrain-soft" min="0" max="100" step="1" title="Soft edges (Shift [ and ])" aria-label="Soft edges">')}
-          ${opt('Strength', 'terrainOpacity', '<input type="range" class="terrain-opacity" min="10" max="100" step="5" title="Strength: lower lets the land show through (1 … 9, 0)" aria-label="Strength">')}
+          ${opt('Size', 'terrainSize', '<input type="range" class="terrain-size" min="0" max="100" step="1" title="Brush size (W and S)" aria-label="Terrain brush size">')}
+          ${opt('Soft', 'terrainSoft', '<input type="range" class="terrain-soft" min="0" max="100" step="1" title="Softness (Q and A)" aria-label="Soft edges">')}
+          ${opt('Strength', 'terrainOpacity', '<input type="range" class="terrain-opacity" min="10" max="100" step="5" title="Strength: lower lets the land show through (E and D)" aria-label="Strength">')}
         </span>
         <span class="tb-group" data-for="path">
           <span class="seg path-style">${Object.entries(PATHS).map(([k, [name]]) => `<button type="button" data-pathstyle="${k}">${name}</button>`).join('')}</span>
-          ${opt('Width', 'pathWidth', '<input type="range" class="path-width" min="2" max="160" step="1" title="Width ([ and ])" aria-label="Path width">')}
+          ${opt('Width', 'pathWidth', '<input type="range" class="path-width" min="2" max="160" step="1" title="Width (W and S)" aria-label="Path width">')}
         </span>
         <span class="tb-group" data-for="pen"><span class="swatches">${INKS.map((c) => `<button class="swatch" data-ink="${c}" style="--c:${c}" aria-label="Ink ${c}"></button>`).join('')}
           <input type="color" class="ink-custom" title="Any colour" aria-label="Any colour"></span></span>
-        <span class="tb-group" data-for="pen eraser">${opt('Size', 'width', '<input type="range" class="width" min="0" max="100" step="1" title="Size ([ and ])" aria-label="Pen size">')}</span>
+        <span class="tb-group" data-for="pen eraser">${opt('Size', 'width', '<input type="range" class="width" min="0" max="100" step="1" title="Size (W and S)" aria-label="Pen size">')}</span>
         <span class="tb-group" data-for="pen">
-          ${opt('Opacity', 'penOpacity', '<input type="range" class="pen-opacity" min="5" max="100" step="5" title="Opacity: lower lets the map show through (1 … 9, 0)" aria-label="Opacity">')}
-          ${opt('Soft', 'penSoft', '<input type="range" class="pen-soft" min="0" max="100" step="5" title="Soft edges (Shift [ and ])" aria-label="Soft edges">')}
+          ${opt('Opacity', 'penOpacity', '<input type="range" class="pen-opacity" min="5" max="100" step="5" title="Opacity: lower lets the map show through (E and D)" aria-label="Opacity">')}
+          ${opt('Soft', 'penSoft', '<input type="range" class="pen-soft" min="0" max="100" step="5" title="Softness (Q and A)" aria-label="Soft edges">')}
         </span>
         <span class="tb-group" data-for="stamp scatter">
-          <button class="brush-chip" data-act="picker" title="Choose art" aria-label="Choose art"></button>
-          ${opt('Size', 'stampSize', '<input type="range" class="stamp-size" min="0" max="100" step="1" title="Stamp size ([ and ])" aria-label="Stamp size">')}
-          <button class="tool flip stamp-only" data-act="stamp-turn" title="Turn the next stamp 15° (. and , keys; Shift: 45°)" aria-label="Turn the next stamp">${icon('arrow-counter-clockwise')}<b class="badge" data-val="stampRot"></b></button>
-          <button class="tool stamp-only" data-act="stamp-flip" title="Flip the next stamp (F)" aria-label="Flip the next stamp" aria-pressed="false">${icon('flip-horizontal')}</button>
-          <button class="tool scatter-only" data-act="scatter-settings" title="Scatter settings: spacing, spread, size and rotation" aria-label="Scatter settings">${icon('gear-six')}</button>
+          <span class="seg place-mode" title="Place one stamp per click, or paint many"><button type="button" data-place="stamp">One</button><button type="button" data-place="scatter">Many</button></span>
+          <button class="brush-chip" data-act="picker" title="Choose art (F) · Alt ← → for the next in its set" aria-label="Choose art"></button>
+          ${opt('Size', 'stampSize', '<input type="range" class="stamp-size" min="0" max="100" step="1" title="Stamp size (W and S)" aria-label="Stamp size">')}
+          ${opt('Opacity', 'stampOpacity', '<input type="range" class="stamp-opacity" min="5" max="100" step="5" title="Opacity of new stamps (E and D)" aria-label="Stamp opacity">')}
+          <button class="tool flip stamp-only" data-act="stamp-turn" title="Turn the next stamp 15° (> and <)" aria-label="Turn the next stamp">${icon('arrow-counter-clockwise')}<b class="badge" data-val="stampRot"></b></button>
+          <button class="tool stamp-only" data-act="stamp-flip" title="Flip the next stamp (Shift F)" aria-label="Flip the next stamp" aria-pressed="false">${icon('flip-horizontal')}</button>
+          <button class="tool scatter-only" data-act="scatter-settings" title="Scatter settings: area (Q and A), density (Alt Q and Alt A), size and rotation" aria-label="Scatter settings">${icon('gear-six')}</button>
         </span>
         <span class="tb-group" data-for="select">
           <span class="tb-note"></span>
@@ -113,8 +120,8 @@ export async function viewEditor(view, id) {
           <button class="tool" data-act="edit-text" title="Edit the text (Enter)" aria-label="Edit the text">${icon('pencil-simple')}</button>
           <button class="tool" data-act="adjust" title="Opacity, tint and brightness" aria-label="Adjust">${icon('magic-wand')}</button>
           <button class="tool" data-act="flip" title="Flip (F)" aria-label="Flip">${icon('flip-horizontal')}</button>
-          <button class="tool" data-act="front" title="Bring to front (])" aria-label="Bring to front">${icon('arrow-up')}</button>
-          <button class="tool" data-act="back" title="Send to back ([)" aria-label="Send to back">${icon('arrow-down')}</button>
+          <button class="tool" data-act="front" title="Bring forward (Ctrl ↑)" aria-label="Bring to front">${icon('arrow-up')}</button>
+          <button class="tool" data-act="back" title="Send backward (Ctrl ↓)" aria-label="Send to back">${icon('arrow-down')}</button>
           <button class="tool" data-act="delete" title="Delete (Del)" aria-label="Delete">${icon('trash')}</button>
         </span>
         <span class="tb-sep"></span>
@@ -128,7 +135,7 @@ export async function viewEditor(view, id) {
         <button class="tool" data-act="fit" title="Fit the map (0)" aria-label="Fit the map">${icon('corners-out')}</button>
         <button class="tool" data-act="style" title="Map style" aria-label="Map style">${icon('sparkle')}</button>
         <button class="tool" data-act="layers" title="Layers" aria-label="Layers">${icon('stack')}</button>
-        <button class="tool" data-act="shortcuts" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">${icon('info')}</button>
+        <button class="tool" data-act="shortcuts" title="Keyboard shortcuts (K or ?)" aria-label="Keyboard shortcuts">${icon('info')}</button>
       </div>
       <div class="layers-panel side-panel" hidden></div>
       <div class="style-panel side-panel" hidden></div>
@@ -204,6 +211,8 @@ class Editor {
     this.penOpacity = load('ac.penOpacity', 1);
     this.penSoft = load('ac.penSoft', 0);
     this.stampSize = load('ac.stampSize', 256);
+    this.stampOpacity = load('ac.stampOpacity', 1); // of new stamps
+    this.snap = load('ac.snap', false); // stamps snap to the map's grid
     // Scatter brush: gap between stamps and how far they stray (both as a
     // share of the stamp size), size variation (±), random turn (share of
     // half a turn), and random mirroring.
@@ -224,6 +233,8 @@ class Editor {
     this.brush = load('ac.brush', []).filter((id) => A.asset(id)); // asset ids to stamp with
     this.multi = load('ac.multi', false);
     this.sel = new Set(); // selected stamps and labels
+    this.lastSel = []; // what was selected before the selection was cleared (` brings it back)
+    this.prevTool = null; // Tab goes back to it
     this.preview = new Map(); // id → object (or null: hidden) as a gesture is changing it; the drawing itself changes when the gesture is committed
     this.undoStack = []; this.redoStack = [];
     this.pointers = new Map();
@@ -473,7 +484,7 @@ class Editor {
       const img = a && images.get(a.id);
       if (img) {
         const k = size / Math.max(a.w, a.h, 1);
-        ctx.globalAlpha = 0.55;
+        ctx.globalAlpha = 0.55 * this.stampOpacity;
         // The stamp tool's ghost is turned and mirrored the way the next stamp will be.
         ctx.translate(mx, my);
         if (tool === 'stamp') { ctx.rotate(this.stampRot * Math.PI / 180); if (this.stampFlip) ctx.scale(-1, 1); }
@@ -608,7 +619,7 @@ class Editor {
   // layers are worked out once, not for each object.
   editableOf() {
     const lay = layerResolver(this.doc), hidden = this.hidden();
-    return (o) => { const k = lay(o); return !hidden.has(k) && !this.locked.has(k); };
+    return (o) => { const k = lay(o); return !o.locked && !hidden.has(k) && !this.locked.has(k); };
   }
 
   // The selected object when exactly one is selected.
@@ -686,6 +697,7 @@ class Editor {
     return {
       id: uid(), kind: 'stamp', asset: a.id, ...this.layerField(),
       x: r1(mx), y: r1(my), w: r1(a.w * k), h: r1(a.h * k), rot: Math.round(rot * 1000) / 1000, flip,
+      ...(this.stampOpacity < 1 ? { opacity: this.stampOpacity } : {}),
     };
   }
 
@@ -816,9 +828,10 @@ class Editor {
   // --- toolbar and picker -------------------------------------------------
 
   setTool(t) {
+    if (t !== this.tool) this.prevTool = this.tool;
     this.tool = t;
     keep('ac.tool', t);
-    if (t !== 'select') this.sel.clear();
+    if (t !== 'select') this.clearSel();
     if ((t === 'stamp' || t === 'scatter') && !this.brush.length) this.openPicker();
     this.syncToolbar();
     this.redrawOverlay();
@@ -826,7 +839,8 @@ class Editor {
 
   syncToolbar() {
     const panning = this.tool === 'pan' || this.spaceDown;
-    for (const b of $$('[data-tool]', this.root)) b.classList.toggle('on', b.dataset.tool === this.tool);
+    for (const b of $$('[data-tool]', this.root)) b.classList.toggle('on', b.dataset.tool === (this.tool === 'scatter' ? 'stamp' : this.tool));
+    for (const b of $$('[data-place]', this.root)) b.classList.toggle('on', b.dataset.place === this.tool);
     for (const b of $$('[data-ink]', this.root)) b.classList.toggle('on', b.dataset.ink === this.ink);
     for (const g of $$('.tb-group', this.root)) g.hidden = !g.dataset.for.split(' ').includes(this.tool);
     $('.tb-name', this.root).textContent = TOOLS.find(([t]) => t === this.tool)[3];
@@ -836,6 +850,7 @@ class Editor {
     $('.ink-custom', this.root).value = this.ink;
     $('.ink-custom', this.root).classList.toggle('on', !INKS.includes(this.ink));
     $('.stamp-size', this.root).value = sliderFromSize(this.stampSize);
+    $('.stamp-opacity', this.root).value = Math.round(this.stampOpacity * 100);
     $('.land-size', this.root).value = sliderFromSize(this.landSize);
     $('.terrain-size', this.root).value = sliderFromSize(this.terrainSize);
     $('.path-width', this.root).value = this.pathWidth;
@@ -870,7 +885,7 @@ class Editor {
     const pct = (v) => `${Math.round(v * 100)}%`;
     const v = {
       landSize: this.landSize, terrainSize: this.terrainSize, terrainSoft: pct(this.terrainSoft), terrainOpacity: pct(this.terrainOpacity),
-      pathWidth: this.pathWidth, width: this.width, penOpacity: pct(this.penOpacity), penSoft: pct(this.penSoft), stampSize: this.stampSize,
+      pathWidth: this.pathWidth, width: this.width, penOpacity: pct(this.penOpacity), penSoft: pct(this.penSoft), stampSize: this.stampSize, stampOpacity: pct(this.stampOpacity),
       stampRot: this.stampRot ? `${this.stampRot}°` : '',
     };
     for (const b of $$('[data-val]', this.root)) b.textContent = v[b.dataset.val];
@@ -889,7 +904,7 @@ class Editor {
     el.hidden = !empty || this.hintGone;
     if (!el.hidden) $('.hint-text', el).textContent = matchMedia('(pointer: coarse)').matches
       ? 'Start with Land to paint the coast, or Stamp to place art'
-      : 'Start with Land (L) to paint the coast, or Stamp (S) to place art · ? for shortcuts';
+      : 'Start with Land (M) to paint the coast, or Stamp (O) to place art · ? for shortcuts';
   }
 
   // Turn the next stamp by deg (clockwise), within one full turn.
@@ -1494,6 +1509,7 @@ class Editor {
       if (b.dataset.ink) { this.ink = b.dataset.ink; keep('ac.ink', this.ink); this.syncToolbar(); }
       if (b.dataset.pathstyle) { this.pathStyle = b.dataset.pathstyle; keep('ac.pathStyle', this.pathStyle); this.syncToolbar(); }
       if (b.dataset.landmode) { this.landMode = b.dataset.landmode; keep('ac.landMode', this.landMode); this.syncToolbar(); }
+      if (b.dataset.place) { keep('ac.stampPlace', b.dataset.place); this.setTool(b.dataset.place); }
       const act = b.dataset.act;
       if (act === 'undo') this.undo();
       else if (act === 'redo') this.redo();
@@ -1506,8 +1522,8 @@ class Editor {
       else if (act === 'picker') this.togglePicker('stamp');
       else if (act === 'textures') this.togglePicker('texture');
       else if (act === 'flip') this.flipSelected();
-      else if (act === 'front') this.toFront();
-      else if (act === 'back') this.toBack();
+      else if (act === 'front') this.stepZ(1);
+      else if (act === 'back') this.stepZ(-1);
       else if (act === 'duplicate') this.duplicateSelected();
       else if (act === 'delete') this.deleteSelected();
       else if (act === 'edit-text') this.editLabel(this.selectedObj());
@@ -1521,7 +1537,8 @@ class Editor {
     $('.toolbar', this.root).onclick = onBar;
     $('.toolrail', this.root).onclick = onBar;
     // Slider handlers set the value first; this then updates the numbers beside them.
-    $('.toolbar', this.root).addEventListener('input', () => this.showValues());
+    // The slider last moved is the one Shift ↑ ↓ change.
+    $('.toolbar', this.root).addEventListener('input', (e) => { if (e.target.type === 'range') this.lastRange = e.target; this.showValues(); });
     $('[data-hint-close]', this.root).onclick = () => { this.hintGone = true; keep('ac.hintGone', true); this.syncHint(); };
     this.wireTips();
     $('.width', this.root).oninput = (e) => { this.flashSize(); this.width = penWidth(+e.target.value); keep('ac.width', this.width); };
@@ -1529,6 +1546,7 @@ class Editor {
     $('.pen-soft', this.root).oninput = (e) => { this.penSoft = +e.target.value / 100; keep('ac.penSoft', this.penSoft); };
     $('.ink-custom', this.root).oninput = (e) => { this.ink = e.target.value; keep('ac.ink', this.ink); this.syncToolbar(); };
     $('.stamp-size', this.root).oninput = (e) => { this.flashSize(); this.stampSize = sizeFromSlider(+e.target.value); keep('ac.stampSize', this.stampSize); };
+    $('.stamp-opacity', this.root).oninput = (e) => { this.stampOpacity = +e.target.value / 100; keep('ac.stampOpacity', this.stampOpacity); this.redrawOverlay(); };
     $('.land-size', this.root).oninput = (e) => { this.flashSize(); this.landSize = sizeFromSlider(+e.target.value); keep('ac.landSize', this.landSize); };
     $('.path-width', this.root).oninput = (e) => { this.flashSize(); this.pathWidth = +e.target.value; keep('ac.pathWidth', this.pathWidth); };
     $('.terrain-size', this.root).oninput = (e) => { this.flashSize(); this.terrainSize = sizeFromSlider(+e.target.value); keep('ac.terrainSize', this.terrainSize); };
@@ -1568,10 +1586,23 @@ class Editor {
     this.on(c, 'wheel', (e) => {
       e.preventDefault();
       const [cx, cy] = this.local(e);
-      // Alt + wheel sizes the brush, a step per notch (trackpads send many small ones).
-      if (e.altKey && !e.ctrlKey && !e.metaKey) {
-        this.wheelSize = (this.wheelSize || 0) + (e.deltaY || e.deltaX);
-        if (Math.abs(this.wheelSize) >= 50) { this.resizeBrush(this.wheelSize < 0); this.wheelSize = 0; }
+      // Wheel with keys held, a step per notch (trackpads send many small
+      // ones, so they're added up): Shift sizes the brush or the selection;
+      // Alt the brush, or with the stamp tool picks the next in its set;
+      // Ctrl turns the selection (Ctrl Alt, finely). A trackpad pinch also
+      // arrives as Ctrl + wheel, in small fractional steps: that still zooms.
+      const any = this.tool === 'select' && this.selectedObjs().length > 0;
+      const d = e.deltaY || e.deltaX; // Shift turns the wheel sideways in some browsers
+      const mouseCtrl = (e.ctrlKey || e.metaKey) && any && e.deltaMode === 0 && Math.abs(e.deltaY) >= 40 && Number.isInteger(e.deltaY);
+      if ((e.shiftKey || e.altKey || mouseCtrl) && !this.readOnly) {
+        this.wheelStep = (this.wheelStep || 0) + d;
+        if (Math.abs(this.wheelStep) < 50) return;
+        const up = this.wheelStep < 0;
+        this.wheelStep = 0;
+        if (mouseCtrl) this.rotateSelected((up ? -1 : 1) * (e.altKey ? 1 : 15));
+        else if (e.altKey && (this.tool === 'stamp' || this.tool === 'scatter')) this.stepSet(up ? -1 : 1);
+        else if (any) this.scaleSelected(up ? 1.05 : 1 / 1.05);
+        else this.resizeBrush(up);
         return;
       }
       if (e.ctrlKey || e.metaKey || Math.abs(e.deltaX) < 1) this.zoomAt(cx, cy, Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0015)));
@@ -1585,20 +1616,35 @@ class Editor {
     if (/INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName) && document.activeElement.type !== 'range' && document.activeElement.type !== 'checkbox') return;
     if (document.getElementById('modal-root').childElementCount) return;
     const mod = e.ctrlKey || e.metaKey;
-    const k = e.key.toLowerCase();
+    const k = e.key.toLowerCase(), code = e.code;
+    // Keys by position (KeyW…), so Shift (larger steps) and other layouts work.
+    const letter = /^Key([A-Z])$/.exec(code)?.[1]?.toLowerCase();
+    const big = e.shiftKey;
     // Read-only: only the keys that move the view.
-    if (this.readOnly && (mod || ![' ', '?', '0', '+', '=', '-'].includes(k))) return;
-    if (mod && k === 'z') { e.preventDefault(); if (e.shiftKey) this.redo(); else this.undo(); return; }
-    if (mod && k === 'y') { e.preventDefault(); this.redo(); return; }
-    if (mod && k === 'c') { if (this.copySelected()) e.preventDefault(); return; }
-    if (mod && k === 'x') { if (this.copySelected()) { e.preventDefault(); this.deleteSelected(); } return; }
-    if (mod && k === 'v') { if (clipboard?.length) { e.preventDefault(); this.paste(); } return; }
-    if (mod && k === 'd') { e.preventDefault(); this.duplicateSelected(); return; }
-    if (mod && k === 'a') { e.preventDefault(); this.select(this.selectable().map((o) => o.id)); if (this.tool !== 'select') this.setTool('select'); this.syncToolbar(); this.redrawOverlay(); return; }
-    // Everything saves as you go; don't let the browser offer to save the page.
-    if (mod && k === 's') { e.preventDefault(); toast('Saved: every change is kept as you make it'); return; }
-    if (mod && k === '0') { e.preventDefault(); this.fit(); return; }
-    if (mod) return;
+    if (this.readOnly && !(mod && k === '0') && (mod || ![' ', '?', 'k', '0', '+', '=', '-'].includes(k))) return;
+    const any = this.selectedObjs().length > 0, sel = this.selectedObj();
+    if (mod) {
+      if (k === 'z') { e.preventDefault(); if (e.shiftKey) this.redo(); else this.undo(); }
+      else if (k === 'y') { e.preventDefault(); this.redo(); }
+      else if (k === 'c') { if (this.copySelected()) e.preventDefault(); }
+      else if (k === 'x') { if (this.copySelected()) { e.preventDefault(); this.deleteSelected(); } }
+      else if (k === 'v') { if (clipboard?.length) { e.preventDefault(); this.paste(); } }
+      else if (k === 'd') { e.preventDefault(); this.duplicateSelected(); }
+      else if (k === 'a') { e.preventDefault(); this.select(this.selectable().map((o) => o.id)); if (this.tool !== 'select') this.setTool('select'); this.syncToolbar(); this.redrawOverlay(); }
+      // Everything saves as you go; don't let the browser offer to save the page.
+      else if (k === 's') { e.preventDefault(); toast('Saved: every change is kept as you make it'); }
+      else if (k === '0') { e.preventDefault(); this.fit(); }
+      else if (letter === 'g') { e.preventDefault(); if (e.shiftKey) this.ungroupSelected(); else this.groupSelected(); }
+      else if (letter === 'l') { e.preventDefault(); if (e.shiftKey) this.unlockAll(); else this.lockSelected(); }
+      else if (code === 'ArrowUp' || code === 'ArrowDown') {
+        e.preventDefault();
+        const up = code === 'ArrowUp';
+        // Ctrl Shift: the layer (the selection's, or the one drawn on); Ctrl: order within it.
+        if (e.shiftKey) { if (any) this.moveSelectedLayer(up); else this.stepActiveLayer(up); }
+        else if (any) this.stepZ(up ? 1 : -1);
+      }
+      return;
+    }
     if (e.key === ' ') {
       e.preventDefault();
       // Space pans; it mustn't also press whichever toolbar button has focus.
@@ -1606,69 +1652,295 @@ class Editor {
       if (!this.spaceDown) { this.spaceDown = true; this.syncToolbar(); }
       return;
     }
-    if (e.key === '?') { e.preventDefault(); showShortcuts(); return; }
-    const any = this.selectedObjs().length > 0, sel = this.selectedObj();
+    if (e.key === '?' || (letter === 'k' && !e.altKey)) { e.preventDefault(); showShortcuts(); return; }
+    if (e.key === '/') { e.preventDefault(); this.togglePanel('.layers-panel', () => this.renderLayers()); return; }
+    if (e.key === 'Tab') { e.preventDefault(); if (this.prevTool && TOOLS.some(([t]) => t === this.prevTool)) this.setTool(this.prevTool); return; }
+    if (code === 'Backquote') { e.preventDefault(); this.restoreSelection(); return; }
     if (any && (e.key === 'Delete' || e.key === 'Backspace')) { e.preventDefault(); this.deleteSelected(); return; }
     if (sel?.kind === 'label' && e.key === 'Enter') { e.preventDefault(); this.editLabel(sel); return; }
+    const arrow = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key];
+    // Alt ← →: the next or previous picture in the stamp's set.
+    if (arrow && e.altKey && (this.tool === 'stamp' || this.tool === 'scatter')) { if (arrow[0]) { e.preventDefault(); this.stepSet(arrow[0]); } return; }
     // Arrows nudge the selection: a screen pixel, or ten with Shift.
-    const nudge = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key];
-    if (any && nudge) {
+    if (any && arrow) {
       e.preventDefault();
       const step = (e.shiftKey ? 10 : 1) / this.s;
       const objs = this.selectedObjs();
-      this.commit({ undo: objs.map(clean), redo: objs.map((o) => ({ ...clean(o), ...shifted(o, nudge[0] * step, nudge[1] * step) })) });
+      this.commit({ undo: objs.map(clean), redo: objs.map((o) => ({ ...clean(o), ...shifted(o, arrow[0] * step, arrow[1] * step) })) });
+      return;
+    }
+    // Shift ↑ ↓ with nothing selected: the slider last moved.
+    if (arrow && !arrow[0] && e.shiftKey && this.lastRange?.isConnected && !this.lastRange.closest('[hidden]')) {
+      e.preventDefault();
+      const r = this.lastRange, span = (+r.max - +r.min) / 20;
+      r.value = Math.max(+r.min, Math.min(+r.max, +r.value - arrow[1] * Math.max(span, +r.step || 1)));
+      r.dispatchEvent(new Event('input', { bubbles: true }));
       return;
     }
     // Escape first drops whatever is half done (a stroke, a box, a move).
     if (e.key === 'Escape' && this.gesture && this.gesture.kind !== 'pinch') { this.restore(this.gesture); this.gesture = null; this.pointers.clear(); this.syncToolbar(); this.redraw(); return; }
-    if (e.key === 'Escape') { this.sel.clear(); this.closePanels(); this.syncToolbar(); this.redrawOverlay(); return; }
-    // Brush settings, as in painting apps: Shift [ ] softness, 1–9 and 0
-    // opacity (10–90%, 100%), X land ↔ water. Digits are by key position, so
-    // they work on keyboards where the number row needs Shift.
-    const digit = /^Digit(\d)$/.exec(e.code)?.[1];
-    if (!any && e.shiftKey && (e.code === 'BracketLeft' || e.code === 'BracketRight')) {
-      if (this.brushSetting('soft', e.code === 'BracketRight' ? 0.1 : -0.1)) e.preventDefault();
+    if (e.key === 'Escape') { this.clearSel(); this.closePanels(); this.syncToolbar(); this.redrawOverlay(); return; }
+    if (this.toolKey(e, letter, big, any)) { e.preventDefault(); return; }
+    // Number keys: opacity, or strength (10–90%, and 0 for 100%), by key position.
+    const digit = /^Digit(\d)$/.exec(code)?.[1];
+    if (digit != null && !e.shiftKey && !e.altKey && this.brushSetting('opacity', null, digit === '0' ? 1 : +digit / 10)) { e.preventDefault(); return; }
+    if (letter === 'g' && !e.altKey) { this.toggleSnap(); return; }
+    if (letter && KEYS[letter] && !e.altKey && !e.shiftKey) {
+      this.setTool(letter === 'o' ? load('ac.stampPlace', 'stamp') : KEYS[letter]);
       return;
     }
-    if (digit != null && !e.shiftKey && !e.altKey && this.brushSetting('opacity', null, digit === '0' ? 1 : +digit / 10)) { e.preventDefault(); return; }
-    if (k === 'x' && this.tool === 'land') {
+    if (k === '0') this.fit();
+    else if (k === '+' || k === '=') this.zoomAt(this.vw / 2, this.vh / 2, 1.25);
+    else if (k === '-') this.zoomAt(this.vw / 2, this.vh / 2, 0.8);
+    else if (code === 'BracketLeft' || code === 'BracketRight') {
+      const up = code === 'BracketRight';
+      if (any && this.tool === 'select') { if (up) this.toFront(); else this.toBack(); }
+      else if (e.shiftKey) this.brushSetting('soft', up ? 0.1 : -0.1);
+      else this.resizeBrush(up);
+    }
+  }
+
+  // The keys that change the current tool's settings (Inkarnate's layout):
+  // W S size, E D opacity, Q A softness (the stamp's area; Alt: density),
+  // F the art or texture catalogue, X land ↔ water, < > turn. Shift takes
+  // larger steps. True when the key was used.
+  toolKey(e, letter, big, any) {
+    const tool = this.tool, code = e.code;
+    const turn = code === 'Comma' || code === 'Period' ? (code === 'Period' ? 1 : -1) : 0;
+    if (tool === 'select') {
+      if (!any) return false;
+      if (letter === 'w' || letter === 's') { this.scaleSelected(letter === 'w' ? (big ? 1.25 : 1.05) : 1 / (big ? 1.25 : 1.05)); return true; }
+      if (turn) { this.rotateSelected(turn * (big ? 15 : 5)); return true; }
+      if (letter === 'f') { this.flipSelected(); return true; }
+      return false;
+    }
+    if (tool === 'text') {
+      const target = this.textTarget();
+      if (letter === 'w' || letter === 's') return this.labelSetting(target, 'size', letter === 'w' ? (big ? 1.25 : 1.1) : 1 / (big ? 1.25 : 1.1));
+      if (letter === 'q' || letter === 'a') return this.labelSetting(target, 'curve', (letter === 'q' ? 1 : -1) * (big ? 0.25 : 0.05));
+      if (code === 'BracketLeft' || code === 'BracketRight') return this.labelSetting(target, 'font', code === 'BracketRight' ? 1 : -1);
+      return false;
+    }
+    if (letter === 'w' || letter === 's') return this.resizeBrush(letter === 'w', big);
+    if (tool === 'land' && letter === 'x') {
       this.landMode = this.landMode === 'add' ? 'erase' : 'add';
       keep('ac.landMode', this.landMode);
       this.syncToolbar();
       this.redrawOverlay();
       toast(this.landMode === 'add' ? 'Painting land' : 'Painting water', 1200);
-      return;
+      return true;
     }
-    if (KEYS[k]) this.setTool(KEYS[k]);
-    else if (k === '0') this.fit();
-    else if (k === '+' || k === '=') this.zoomAt(this.vw / 2, this.vh / 2, 1.25);
-    else if (k === '-') this.zoomAt(this.vw / 2, this.vh / 2, 0.8);
-    else if (any && k === 'f') this.flipSelected();
-    // With nothing selected, the stamp tool's F and , . set up the next stamp (by key position, so Shift still works).
-    else if (this.tool === 'stamp' && k === 'f') this.flipStamp();
-    else if (this.tool === 'stamp' && (e.code === 'Comma' || e.code === 'Period')) this.turnStamp((e.code === 'Comma' ? -1 : 1) * (e.shiftKey ? 45 : 15));
-    else if (any && k === ']') this.toFront();
-    else if (any && k === '[') this.toBack();
-    else if (k === '[' || k === ']') this.resizeBrush(k === ']');
+    const stamping = tool === 'stamp' || tool === 'scatter';
+    if (letter === 'f' && e.shiftKey && tool === 'stamp') { this.flipStamp(); return true; }
+    if (letter === 'f') {
+      if (stamping) { this.togglePicker('stamp'); return true; }
+      if (tool === 'terrain') { this.togglePicker('terrain'); return true; }
+      return false;
+    }
+    if (letter === 'e' || letter === 'd') return this.brushSetting('opacity', (letter === 'e' ? 1 : -1) * (big ? 0.2 : 0.05));
+    if (stamping && (letter === 'q' || letter === 'a')) {
+      const up = letter === 'q', sc = this.scatter;
+      if (e.altKey) sc.spacing = Math.round(Math.max(0.15, Math.min(2, sc.spacing * (up ? 1 / 1.15 : 1.15) ** (big ? 3 : 1))) * 100) / 100;
+      else sc.spread = Math.round(Math.max(0, Math.min(2, sc.spread + (up ? 1 : -1) * (big ? 0.3 : 0.1))) * 100) / 100;
+      keep('ac.scatter', sc);
+      this.renderScatter();
+      this.flashSize();
+      toast(e.altKey ? `Density ${Math.round(100 * 0.6 / sc.spacing)}%` : `Area ${Math.round(sc.spread * 100)}%`, 1000);
+      return true;
+    }
+    if (letter === 'q' || letter === 'a') return this.brushSetting('soft', (letter === 'q' ? 1 : -1) * (big ? 0.2 : 0.05));
+    if (turn && tool === 'stamp') { this.turnStamp(turn * (big ? 45 : 15)); return true; }
+    return false;
   }
 
-  // [ ] and Alt + wheel: the current tool's size. False for tools without one.
-  resizeBrush(up) {
+  // --- selection helpers (keys) -------------------------------------------
+
+  clearSel() {
+    if (this.sel.size) this.lastSel = [...this.sel];
+    this.sel.clear();
+  }
+
+  restoreSelection() {
+    const ids = this.lastSel.filter((id) => this.get(id));
+    if (!ids.length) return;
+    if (this.tool !== 'select') this.setTool('select');
+    this.select(ids);
+    this.syncToolbar();
+    this.redrawOverlay();
+  }
+
+  // Ids, plus everything grouped with them.
+  withGroups(ids) {
+    const groups = new Set(ids.map((id) => this.get(id)?.group).filter(Boolean));
+    if (!groups.size) return ids;
+    const out = new Set(ids);
+    for (const o of this.selectable()) if (groups.has(o.group)) out.add(o.id);
+    return [...out];
+  }
+
+  groupSelected() {
+    const objs = this.selectedObjs();
+    if (objs.length < 2) { toast('Select two or more things to group'); return; }
+    const group = uid();
+    this.editSelected({ group });
+    toast(`Grouped ${objs.length}: they now select and move together`);
+  }
+
+  ungroupSelected() {
+    if (!this.selectedObjs().some((o) => o.group)) return;
+    this.editSelected({ group: null });
+    toast('Ungrouped');
+  }
+
+  // Locked things can't be picked, moved or erased until unlocked (Ctrl Shift L).
+  lockSelected() {
+    const n = this.selectedObjs().length;
+    if (!n) { toast('Select something to lock (Ctrl Shift L unlocks everything)'); return; }
+    this.editSelected({ locked: true });
+    this.clearSel();
+    this.syncToolbar();
+    toast(`Locked ${n}. Ctrl Shift L unlocks everything`);
+  }
+
+  unlockAll() {
+    const objs = store.liveObjects(this.doc).filter((o) => o.locked);
+    if (!objs.length) { toast('Nothing is locked'); return; }
+    this.commit({ undo: objs.map(clean), redo: objs.map((o) => ({ ...clean(o), locked: null })) });
+    toast(`Unlocked ${objs.length}`);
+  }
+
+  // One step forward or back: past the next thing above or below each
+  // selected one (among things on the same layer that it overlaps), rather
+  // than all the way to the front or back.
+  stepZ(dir) {
+    const objs = this.selectedObjs();
+    if (!objs.length) return;
+    const ids = new Set(objs.map((o) => o.id));
+    const lay = layerResolver(this.doc);
+    const others = this.live().filter((o) => !ids.has(o.id) && o.kind !== 'style' && o.kind !== 'land');
+    const overlaps = (a, b) => { const p = this.box(a), q = this.box(b); return Math.abs(p.cx - q.cx) * 2 <= p.w + q.w + 1 && Math.abs(p.cy - q.cy) * 2 <= p.h + q.h + 1; };
+    this.editSelected((o) => {
+      const z = o.z || 0;
+      const near = others.filter((x) => lay(x) === lay(o) && overlaps(x, o) && (dir > 0 ? (x.z || 0) >= z : (x.z || 0) <= z))
+        .map((x) => x.z || 0).sort((a, b) => dir * (a - b))[0];
+      return near == null ? {} : { z: near + dir * 0.5 };
+    });
+  }
+
+  // The layers in drawing order, top first, that things can go on.
+  pickableLayers() { return this.layers().map((l) => l.id); }
+
+  moveSelectedLayer(up) {
+    const ids = this.pickableLayers();
+    const objs = this.selectedObjs();
+    if (!objs.length) return;
+    const cur = ids.indexOf(this.lay(objs[0]));
+    const next = ids[cur + (up ? -1 : 1)];
+    if (cur < 0 || next == null) { toast(up ? 'Already on the top layer' : 'Already on the bottom layer'); return; }
+    if (this.locked.has(next)) { toast(`The ${this.layerName(next)} layer is locked`); return; }
+    this.editSelected({ layer: next });
+    toast(`Moved to ${this.layerName(next)}`);
+  }
+
+  stepActiveLayer(up) {
+    const ids = this.pickableLayers();
+    const cur = ids.indexOf(this.active() || this.toolLayer());
+    const next = ids[Math.max(0, Math.min(ids.length - 1, (cur < 0 ? 0 : cur) + (up ? -1 : 1)))];
+    if (!next) return;
+    this.setActiveLayer(next);
+    toast(`Drawing on ${this.layerName(next)}`);
+  }
+
+  scaleSelected(k) {
+    const objs = this.selectedObjs();
+    if (!objs.length) return;
+    // Around the selection's middle, so a group keeps its arrangement.
+    const bs = objs.map((o) => this.box(o));
+    const cx = (Math.min(...bs.map((b) => b.cx - b.w / 2)) + Math.max(...bs.map((b) => b.cx + b.w / 2))) / 2;
+    const cy = (Math.min(...bs.map((b) => b.cy - b.h / 2)) + Math.max(...bs.map((b) => b.cy + b.h / 2))) / 2;
+    this.editSelected((o) => {
+      const t = store.transformObject(clean(o), k, cx * (1 - k), cy * (1 - k));
+      // Lines keep their width; only their shape grows.
+      if (o.kind === 'path') t.width = o.width;
+      return t;
+    });
+  }
+
+  rotateSelected(deg) {
+    const objs = this.selectedObjs();
+    if (!objs.length) return;
+    const a = deg * Math.PI / 180, cos = Math.cos(a), sin = Math.sin(a);
+    const bs = objs.map((o) => this.box(o));
+    const cx = bs.reduce((n, b) => n + b.cx, 0) / bs.length, cy = bs.reduce((n, b) => n + b.cy, 0) / bs.length;
+    const turn = (x, y) => [r1(cx + (x - cx) * cos - (y - cy) * sin), r1(cy + (x - cx) * sin + (y - cy) * cos)];
+    const turnPts = (p) => { const out = []; for (let i = 0; i < p.length; i += 2) out.push(...turn(p[i], p[i + 1])); return out; };
+    this.editSelected((o) => {
+      if (o.kind === 'path') return { points: turnPts(o.points) };
+      const [x, y] = objs.length > 1 ? turn(o.x, o.y) : [o.x, o.y];
+      return { x, y, rot: Math.round(((o.rot || 0) + a) * 1000) / 1000, ...(o.along ? { along: turnPts(o.along) } : {}) };
+    });
+  }
+
+  // The text tool's keys change the label just made or edited (while it's
+  // still selected), or else how the next one starts.
+  textTarget() { const o = this.selectedObj(); return o?.kind === 'label' ? o : null; }
+
+  labelSetting(o, field, step) {
+    const base = o || { font: 'serif', curve: 0, size: Math.round(Math.max(this.project.width, this.project.height) / 40), ...load('ac.labelStyle', {}) };
+    let v;
+    if (field === 'size') v = Math.max(4, Math.round(base.size * step));
+    else if (field === 'curve') { if (o?.along) { toast('Text along a line follows its line'); return true; } v = Math.round(Math.max(-1, Math.min(1, (base.curve || 0) + step)) * 100) / 100; }
+    else { const keys = Object.keys(FONTS); v = keys[(keys.indexOf(base.font) + step + keys.length) % keys.length]; }
+    if (o) this.commit({ undo: [clean(o)], redo: [{ ...clean(o), [field]: v }] });
+    else keep('ac.labelStyle', { ...load('ac.labelStyle', {}), [field]: v });
+    toast(`${o ? '' : 'Next label: '}${field === 'size' ? `size ${v}` : field === 'curve' ? `curve ${Math.round(v * 100)}` : FONTS[v][0]}`, 1000);
+    return true;
+  }
+
+  // Alt ← →: the stamp's set is the pictures in its category that share its
+  // name but for a number at the end ("Tower 1", "Tower 2"…), or the whole
+  // category when it has no numbered names.
+  stepSet(dir) {
+    const a = this.brush.map((id) => A.asset(id)).find(Boolean);
+    if (!a) { this.openPicker(); return; }
+    const cat = A.categoryAssets(a.pack, a.category);
+    const set = cat.filter((x) => A.setName(x.name) === A.setName(a.name));
+    const list = set.length > 1 ? set : cat;
+    const i = list.findIndex((x) => x.id === a.id);
+    const next = list[(i + dir + list.length) % list.length];
+    this.setBrush([next.id]);
+    this.redrawOverlay();
+    toast(`${next.name} · ${list.indexOf(next) + 1} of ${list.length}`, 1200);
+  }
+
+  toggleSnap() {
+    this.snap = !this.snap;
+    keep('ac.snap', this.snap);
+    toast(this.snap ? `Snap to grid on (every ${this.gridStep()} map pixels)` : 'Snap to grid off', 1400);
+  }
+
+  // Snapping goes to half the grid's size: the middle of each square and its edges.
+  gridStep() { return Math.max(4, Math.round((mapStyle(this.doc).gridSize || 128) / 2)); }
+  snapped(v) { if (!this.snap) return v; const g = this.gridStep(); return r1(Math.round(v / g) * g); }
+
+  // W S, [ ] and Alt + wheel: the current tool's size (Shift: larger steps). False for tools without one.
+  resizeBrush(up, big = false) {
+    const k = big ? 1.5 : 1;
     if (!['pen', 'eraser', 'land', 'terrain', 'path', 'stamp', 'scatter'].includes(this.tool)) return false;
     if (this.tool === 'stamp' || this.tool === 'scatter') {
-      this.stampSize = Math.max(16, Math.min(2048, Math.round(this.stampSize * (up ? 1.15 : 1 / 1.15))));
+      this.stampSize = Math.max(16, Math.min(2048, Math.round(this.stampSize * (up ? 1.15 * k : 1 / (1.15 * k)))));
       keep('ac.stampSize', this.stampSize);
     } else if (this.tool === 'land') {
-      this.landSize = Math.max(16, Math.min(2048, Math.round(this.landSize * (up ? 1.15 : 1 / 1.15))));
+      this.landSize = Math.max(16, Math.min(2048, Math.round(this.landSize * (up ? 1.15 * k : 1 / (1.15 * k)))));
       keep('ac.landSize', this.landSize);
     } else if (this.tool === 'path') {
-      this.pathWidth = Math.max(2, Math.min(160, Math.round(this.pathWidth * (up ? 1.2 : 1 / 1.2))));
+      this.pathWidth = Math.max(2, Math.min(160, Math.round(this.pathWidth * (up ? 1.2 * k : 1 / (1.2 * k)))));
       keep('ac.pathWidth', this.pathWidth);
     } else if (this.tool === 'terrain') {
-      this.terrainSize = Math.max(16, Math.min(2048, Math.round(this.terrainSize * (up ? 1.15 : 1 / 1.15))));
+      this.terrainSize = Math.max(16, Math.min(2048, Math.round(this.terrainSize * (up ? 1.15 * k : 1 / (1.15 * k)))));
       keep('ac.terrainSize', this.terrainSize);
     } else {
-      this.width = Math.max(2, Math.min(800, Math.round(this.width * (up ? 1.2 : 1 / 1.2))));
+      this.width = Math.max(2, Math.min(800, Math.round(this.width * (up ? 1.2 * k : 1 / (1.2 * k)))));
       keep('ac.width', this.width);
     }
     this.syncToolbar();
@@ -1679,7 +1951,7 @@ class Editor {
   // Shift [ ] and the number keys: soft edges and opacity (strength, for
   // terrain) of the tools that have them. Steps by delta, or sets value.
   brushSetting(which, delta, value) {
-    const field = { pen: { soft: 'penSoft', opacity: 'penOpacity' }, terrain: { soft: 'terrainSoft', opacity: 'terrainOpacity' } }[this.tool]?.[which];
+    const field = { pen: { soft: 'penSoft', opacity: 'penOpacity' }, terrain: { soft: 'terrainSoft', opacity: 'terrainOpacity' }, stamp: { opacity: 'stampOpacity' }, scatter: { opacity: 'stampOpacity' } }[this.tool]?.[which];
     if (!field) return false;
     const min = which === 'soft' ? 0 : this.tool === 'pen' ? 0.05 : 0.1;
     this[field] = Math.round(Math.max(min, Math.min(1, value ?? this[field] + delta)) * 100) / 100;
@@ -1730,7 +2002,7 @@ class Editor {
     } else if (this.tool === 'select') {
       this.gesture = this.selectGesture(pt, mx, my, e) || { kind: 'pan', last: pt };
     } else if (this.tool === 'stamp') {
-      const o = this.newStamp(mx, my, this.stampSize, { flip: this.stampFlip, rot: this.stampRot * Math.PI / 180 });
+      const o = this.newStamp(this.snapped(mx), this.snapped(my), this.stampSize, { flip: this.stampFlip, rot: this.stampRot * Math.PI / 180 });
       if (!o) { this.openPicker(); toast('Choose some art first'); return; }
       o.z = this.nextZ();
       this.preview.set(o.id, o);
@@ -1780,16 +2052,19 @@ class Editor {
       }
     }
     const hit = this.objectAt(mx, my);
-    if (hit && e.shiftKey) {
-      if (this.sel.has(hit.id)) this.sel.delete(hit.id); else this.sel.add(hit.id);
+    // Shift or Ctrl click adds or removes (a group as one).
+    if (hit && (e.shiftKey || e.ctrlKey || e.metaKey)) {
+      const ids = this.withGroups([hit.id]);
+      const on = !this.sel.has(hit.id);
+      for (const id of ids) if (on) this.sel.add(id); else this.sel.delete(id);
       return { kind: 'noop' };
     }
     if (hit) {
-      if (!this.sel.has(hit.id)) this.select([hit.id]);
+      if (!this.sel.has(hit.id)) this.select(this.withGroups([hit.id]));
       return { kind: 'move', origs: this.selectedObjs().map(clean), from: [mx, my] };
     }
-    if (e.pointerType === 'touch') { this.sel.clear(); return null; }
-    if (!e.shiftKey) this.sel.clear();
+    if (e.pointerType === 'touch') { this.clearSel(); return null; }
+    if (!e.shiftKey && !e.ctrlKey && !e.metaKey) this.clearSel();
     return { kind: 'marquee', a: [mx, my], b: [mx, my], base: new Set(this.sel) };
   }
 
@@ -1821,15 +2096,18 @@ class Editor {
       this.eraseAt(pt);
     } else if (g.kind === 'place') {
       const o = g.orig;
-      this.preview.set(g.id, { ...this.get(g.id), x: r1(o.x + mx - g.from[0]), y: r1(o.y + my - g.from[1]) });
+      this.preview.set(g.id, { ...this.get(g.id), x: this.snapped(r1(o.x + mx - g.from[0])), y: this.snapped(r1(o.y + my - g.from[1])) });
     } else if (g.kind === 'move') {
-      for (const o of g.origs) this.preview.set(o.id, { ...this.get(o.id), ...shifted(o, mx - g.from[0], my - g.from[1]) });
+      // With snapping, the first thing's middle lands on the grid and the rest keep their places around it.
+      let dx = mx - g.from[0], dy = my - g.from[1];
+      if (this.snap && g.origs[0]) { const b = this.box(g.origs[0]); dx = this.snapped(b.cx + dx) - b.cx; dy = this.snapped(b.cy + dy) - b.cy; }
+      for (const o of g.origs) this.preview.set(o.id, { ...this.get(o.id), ...shifted(o, dx, dy) });
       g.moved = true;
     } else if (g.kind === 'marquee') {
       g.b = [mx, my];
       const [x0, x1] = [Math.min(g.a[0], mx), Math.max(g.a[0], mx)], [y0, y1] = [Math.min(g.a[1], my), Math.max(g.a[1], my)];
       const inside = this.selectable().filter((o) => { const b = this.box(o); return b.cx >= x0 && b.cx <= x1 && b.cy >= y0 && b.cy <= y1; });
-      this.select([...g.base, ...inside.map((o) => o.id)]);
+      this.select([...g.base, ...this.withGroups(inside.map((o) => o.id))]);
     } else if (g.kind === 'scale') {
       const o = g.orig;
       const k = Math.hypot(mx - o.x, my - o.y) / g.d0;
@@ -2089,23 +2367,31 @@ function ring(ctx, x, y, r, scale, dashed = false) {
 }
 
 // Every shortcut, for the ? list (and kept in step with the README's table).
+// Laid out like Inkarnate's own list, so the same keys work in both.
 export const SHORTCUTS = [
-  ['Tools', [['H, or hold Space', 'Move the view'], ['V', 'Select'], ['L', 'Land and water'], ['G', 'Terrain'], ['P', 'Paths'], ['T', 'Text'],
-    ['B', 'Pen and colour brush'], ['E', 'Eraser'], ['S', 'Stamp'], ['R', 'Scatter']]],
-  ['While painting', [['[  ], or Alt + wheel', 'Smaller / larger brush or stamp'], ['Shift [  ]', 'Softer / harder edges (pen, terrain)'],
-    ['1 … 9, 0', 'Opacity or strength 10 … 90%, 100% (pen, terrain)'], ['X', 'Swap land and water'], ['Alt (hold)', 'Land ↔ water for one stroke'], ['Shift (rotating)', 'Turn in 15° steps'],
-    [',  .', 'Turn the next stamp 15° (Shift: 45°)'], ['F', 'Flip the next stamp (with nothing selected)'],
-    ['Ctrl / Cmd click a picture', 'Pick several stamps to place at random']]],
-  ['Selection', [['Drag on empty map, Shift-click', 'Select several'], ['Arrows (Shift: ×10)', 'Nudge'], ['F', 'Flip'],
-    ['[  ]', 'Send back / bring forward'], ['Enter, or double-click', 'Edit a label'], ['Alt-click, or double-click a point', 'Remove a path point'],
-    ['Del', 'Delete'], ['Esc', 'Cancel what’s half done, then clear the selection']]],
-  ['Everywhere', [['Ctrl Z / Ctrl Shift Z (or Y)', 'Undo / redo'], ['Ctrl C / X / V', 'Copy, cut, paste (also between maps)'], ['Ctrl D', 'Duplicate'],
-    ['Ctrl A', 'Select all'], ['0, or Ctrl 0', 'Fit the map (Ctrl 0 while painting)'], ['+  −, or the wheel', 'Zoom'], ['?', 'This list']]],
+  ['Everywhere', [['Wheel', 'Zoom'], ['Space, or the middle button, and drag', 'Move the view'], ['K or ?', 'This list'], ['/', 'Layers panel'],
+    ['Ctrl Z / Ctrl Shift Z (or Y)', 'Undo / redo'], ['G', 'Snap stamps to the grid, on or off'], ['Ctrl Shift ↑ ↓', 'Layer to draw on: up / down'],
+    ['Shift ↑ ↓', 'The slider last moved: up / down'], ['Tab', 'Previous tool'], ['0, or Ctrl 0', 'Fit the map'], ['+  −', 'Zoom']]],
+  ['Tools', [['V', 'Select'], ['M', 'Land and water'], ['B', 'Brush (textures)'], ['O', 'Stamp'], ['L', 'Lines'], ['T', 'Text'],
+    ['P', 'Pen'], ['U', 'Eraser'], ['H', 'Move the view']]],
+  ['Select', [['Ctrl A', 'Select all'], ['` or ~', 'Bring back the last selection'], ['Esc', 'Deselect (or cancel what’s half done)'],
+    ['Del or Backspace', 'Delete'], ['Ctrl C / X / V, Ctrl D', 'Copy, cut, paste, duplicate'], ['Ctrl G / Ctrl Shift G', 'Group / ungroup'],
+    ['Ctrl L / Ctrl Shift L', 'Lock / unlock everything'], ['Arrows', 'Move'], ['W / S, or Shift + wheel', 'Larger / smaller'],
+    ['> / <, or Ctrl + wheel', 'Turn (Ctrl Alt + wheel: finely)'], ['Ctrl ↑ ↓', 'Forward / backward'], ['[  ]', 'To the back / front'],
+    ['Ctrl Shift ↑ ↓', 'Move to the layer above / below'], ['Shift, dragging the round handle', 'Turn in 15° steps'], ['F', 'Flip'],
+    ['Ctrl or Shift click, or drag', 'Add to / take from the selection'], ['Enter, or double-click', 'Edit a label'], ['Alt-click a path point', 'Remove it']]],
+  ['Land', [['X', 'Paint land / water'], ['Alt (hold)', 'The other one, for one stroke'], ['W / S, or Shift + wheel', 'Brush size']]],
+  ['Brush', [['F', 'Texture catalogue'], ['W / S, or Shift + wheel', 'Size'], ['E / D', 'Strength'], ['Q / A', 'Softness']]],
+  ['Stamp', [['F', 'Stamp catalogue'], ['W / S, or Shift + wheel', 'Size'], ['E / D', 'Opacity'], ['Q / A', 'Area (placing many)'], ['Alt Q / Alt A', 'Density (placing many)'],
+    ['Alt → ←, or Alt + wheel', 'Next / previous in the set'], ['> / <', 'Turn the next stamp'], ['Shift F', 'Flip the next stamp'],
+    ['Ctrl click a picture', 'Pick several to place at random']]],
+  ['Text', [['W / S', 'Size'], [']  [', 'Next / previous font'], ['Q / A', 'Curve']]],
+  ['Pen, lines and eraser', [['W / S', 'Size'], ['E / D', 'Opacity (pen)'], ['Q / A', 'Softness (pen)']]],
 ];
 
 function showShortcuts() {
   if (document.getElementById('modal-root').childElementCount) return;
   modal('Keyboard shortcuts', SHORTCUTS.map(([group, rows]) => `<div class="field-label">${group}</div>
     <table class="keys">${rows.map(([k, what]) => `<tr><td><kbd>${esc(k)}</kbd></td><td>${esc(what)}</td></tr>`).join('')}</table>`).join('')
-    + '<p class="muted small">On a Mac, Cmd works wherever Ctrl is shown.</p>', { wide: true });
+    + '<p class="muted small">Hold Shift for larger steps. Number keys 1–9 and 0 also set opacity (10–90%, 100%). On a Mac, Cmd works wherever Ctrl is shown.</p>', { wide: true });
 }

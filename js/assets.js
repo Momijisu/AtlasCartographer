@@ -72,6 +72,10 @@ export function categoryAssets(pack, category) {
   return list;
 }
 
+// A picture's set: its name without a number at the end, so "Tower 1",
+// "Tower_2" and "Tower (3)" are variants of one thing.
+export const setName = (name) => name.replace(/[\s_-]*\(?\d+\)?$/, '').toLowerCase() || name.toLowerCase();
+
 export function packs() {
   fresh();
   return memo.packs ??= buildPacks();

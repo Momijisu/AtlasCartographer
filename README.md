@@ -9,7 +9,7 @@ A fantasy map maker for phone and PC, and a companion to [WorldAtlas](https://gi
 - World, region, city and battlemap maps in one editor: world and region maps start as sea, cities and battlemaps as land, and battlemaps are sized in squares with a matching grid
 - Land and water brushes that draw the coastline, its outline and ripples in the sea for you, with coasts from smooth to rugged
 - Terrain painting: any texture from your art library brushed onto the land with soft edges and adjustable strength, stopping at the coast
-- Stamps from your art library, placed one at a time (turned and flipped before placing if you like) or painted with a scatter brush (spacing, spread, size variation, random rotation and mirroring); Ctrl-click to place a random mix
+- Stamps from your art library, placed one at a time (turned and flipped before placing if you like) or many at once (area, density, size variation, random rotation and mirroring); Ctrl-click to place a random mix, and step through numbered variants of a stamp with Alt + arrows
 - Move, scale, rotate, flip, layer, tint, brighten and fade stamps; select several to move, duplicate, copy and paste, also between maps
 - Paths: roads, trails, borders, and rivers that widen towards the mouth, with points you can drag, add and remove afterwards
 - Labels: straight, curved, or along a line you draw, in six fonts, with letter spacing, capitals and a soft outline
@@ -19,7 +19,7 @@ A fantasy map maker for phone and PC, and a companion to [WorldAtlas](https://gi
 - An art library: import a folder or zip of images, whose folders become packs and categories; export any pack as a single `.atlaspack` file and import it on another device or install; tag packs by map type, browse them with previews, search everything, and see what you've used recently
 - Export to PNG, WebP or JPEG at full size or smaller, ready to upload to WorldAtlas Maps
 - Duplicate a map, or change its size by scaling everything or changing the canvas
-- Keyboard shortcuts for every tool; press **?** in the editor for the list
+- Inkarnate's keyboard layout (W/S size, E/D opacity, Q/A softness, F catalogue, and the rest), plus grouping, locking and snapping to the grid; press **K** or **?** in the editor for the list
 - Dark and light themes
 
 Plain HTML, CSS and JavaScript. No server, no build step.
