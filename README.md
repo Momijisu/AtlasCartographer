@@ -9,7 +9,7 @@ A fantasy map maker for phone and PC, and a companion to [WorldAtlas](https://gi
 - World, region, city and battlemap maps in one editor: world and region maps start as sea, cities and battlemaps as land, and battlemaps are sized in squares with a matching grid
 - Land and water brushes that draw the coastline, its outline and ripples in the sea for you, with coasts from smooth to rugged
 - Terrain painting: any texture from your art library brushed onto the land with soft edges and adjustable strength, stopping at the coast
-- Stamps from your art library, placed one at a time or painted with a scatter brush (spacing, spread, size variation, random rotation and mirroring); Ctrl-click to place a random mix
+- Stamps from your art library, placed one at a time (turned and flipped before placing if you like) or painted with a scatter brush (spacing, spread, size variation, random rotation and mirroring); Ctrl-click to place a random mix
 - Move, scale, rotate, flip, layer, tint, brighten and fade stamps; select several to move, duplicate, copy and paste, also between maps
 - Paths: roads, trails, borders, and rivers that widen towards the mouth, with points you can drag, add and remove afterwards
 - Labels: straight, curved, or along a line you draw, in six fonts, with letter spacing, capitals and a soft outline

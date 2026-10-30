@@ -146,10 +146,15 @@ body.editing { overflow: hidden; overscroll-behavior: none; }
 .pk-search { min-height: 34px; padding: .3em .6em; font-size: .9rem; }
 .pk-found { margin: 0; }
 .pk-grid > p { grid-column: 1 / -1; }
-.ink-custom { width: 26px; height: 26px; min-height: 0; padding: 0; border: 2px solid var(--ink-2); border-radius: 50%; overflow: hidden; cursor: pointer; box-shadow: 0 0 0 1px var(--rule-strong); }
-.ink-custom.on { box-shadow: 0 0 0 2px var(--brass); }
+.toolbar .ink-custom {
+  -webkit-appearance: none; appearance: none; box-sizing: border-box;
+  width: 26px; height: 26px; min-width: 26px; min-height: 0; flex: 0 0 26px; padding: 0; background: none;
+  border: 2px solid var(--ink-2); border-radius: 50%; overflow: hidden; cursor: pointer; box-shadow: 0 0 0 1px var(--rule-strong);
+}
+.toolbar .ink-custom.on { box-shadow: 0 0 0 2px var(--brass); }
 .ink-custom::-webkit-color-swatch-wrapper { padding: 0; }
 .ink-custom::-webkit-color-swatch { border: 0; border-radius: 50%; }
+.ink-custom::-moz-color-swatch { border: 0; border-radius: 50%; }
 .toolbar .pen-opacity, .toolbar .pen-soft { width: 72px; min-height: 0; padding: 0; flex-shrink: 0; accent-color: var(--rubric); background: transparent; border: 0; }
 
 /* Picker as a browser: packs, then categories with preview strips. */
@@ -181,3 +186,51 @@ table.keys { width: 100%; border-collapse: collapse; margin-bottom: 1rem; font-s
 table.keys td { padding: .3rem .4rem; border-bottom: 1px solid var(--rule); vertical-align: top; }
 table.keys td:first-child { width: 42%; }
 kbd { font: 500 .82rem var(--mono); background: var(--ink-3); border: 1px solid var(--rule-strong); border-bottom-width: 2px; border-radius: 3px; padding: .05em .4em; white-space: nowrap; }
+
+/* Options bar: the tool's name, and each slider with its caption and value. */
+.tb-name { padding: 0 .4rem; font: 600 1.05rem/1 var(--display); color: var(--text); white-space: nowrap; flex-shrink: 0; }
+.toolbar .opt { display: flex; flex-direction: column; gap: .15rem; margin: 0 .3rem 0 .1rem; flex-shrink: 0; }
+.toolbar .opt > input { margin: 0; }
+.opt-cap { display: flex; justify-content: space-between; gap: .35em; font: 500 .68rem/1 var(--sans); letter-spacing: .04em; color: var(--muted); white-space: nowrap; }
+.opt-cap b { min-width: 2.2em; text-align: right; font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; }
+.tb-note { padding: 0 .5rem; font-size: .85rem; color: var(--muted); white-space: nowrap; }
+.tb-note[hidden] { display: none; }
+.tool { position: relative; }
+.tool .badge { position: absolute; right: 1px; top: 1px; padding: 0 3px; border-radius: 9px; background: var(--rubric); color: var(--rubric-ink); font: 700 .62rem/15px var(--sans); }
+.tool .badge:empty { display: none; }
+.zoom { display: inline-flex; align-items: center; flex-shrink: 0; }
+.tool.small { width: 32px; height: 32px; font-size: 1rem; }
+.zoom-pct { min-width: 3.4em; height: 32px; padding: 0 .2em; border: 0; border-radius: 6px; background: transparent; color: var(--text-2); font: 500 .85rem var(--sans); font-variant-numeric: tabular-nums; cursor: pointer; }
+.zoom-pct:hover { background: var(--ink-3); color: var(--text); }
+
+/* A tool's name beside the rail (mouse only), and the hint on an empty map. */
+.tool-tip {
+  position: absolute; z-index: 5; transform: translateY(-50%); pointer-events: none; white-space: nowrap;
+  padding: .3rem .55rem; border-radius: 6px; background: var(--ink-3); border: 1px solid var(--rule-strong); box-shadow: var(--shadow);
+  font: 500 .88rem/1.2 var(--sans); color: var(--text);
+}
+.tool-tip.above { transform: translate(-50%, -100%); }
+.tool-tip kbd { margin-left: .35em; }
+.tool-tip[hidden] { display: none; }
+.map-hint {
+  position: absolute; top: .8rem; left: 0; right: 0; margin: 0 auto; width: max-content; display: flex; align-items: center; gap: .2rem;
+  max-width: calc(100% - 1rem); padding: .3rem .3rem .3rem .9rem; border-radius: 8px;
+  background: color-mix(in srgb, var(--ink-2) 94%, transparent); border: 1px solid var(--rule-strong); box-shadow: var(--shadow);
+  font-size: .9rem; line-height: 1.35; color: var(--text-2);
+}
+.map-hint[hidden] { display: none; }
+.map-hint .icon-btn { flex-shrink: 0; }
+
+/* The picker's larger preview, to its left. */
+.pk-preview {
+  position: absolute; z-index: 5; width: 180px; padding: .5rem; display: grid; gap: .15rem; pointer-events: none;
+  background: var(--ink-2); border: 1px solid var(--rule-strong); border-radius: 8px; box-shadow: var(--shadow);
+}
+.pk-preview[hidden] { display: none; }
+.pk-preview .pv-pic {
+  display: grid; place-items: center; width: 160px; height: 160px; margin-bottom: .2rem; border-radius: var(--r); overflow: hidden;
+  background: repeating-conic-gradient(var(--ink-3) 0 25%, var(--ink-2) 0 50%) 0 0 / 16px 16px;
+}
+.pk-preview img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.pk-preview b { font: 600 .9rem/1.2 var(--sans); color: var(--text); overflow-wrap: anywhere; }
+.pk-preview small { color: var(--muted); overflow-wrap: anywhere; }

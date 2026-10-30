@@ -14,16 +14,16 @@ import { exportDialog } from '../export.js';
 
 const INKS = ['#2b2118', '#6b4a2b', '#2f5d7c', '#3f6b3a', '#8e2f22'];
 const TOOLS = [
-  ['pan', 'hand-pointing', 'Move the view (H, or hold Space)'],
-  ['select', 'arrows-out-cardinal', 'Select, move, scale and rotate stamps (V)'],
-  ['land', 'globe-hemisphere-west', 'Land and water (L)'],
-  ['terrain', 'feather', 'Terrain: paint textures onto the land (G)'],
-  ['text', 'text-b', 'Text: click to add a label, or click one to edit it (T)'],
-  ['path', 'path', 'Paths: roads, trails, rivers and borders (P)'],
-  ['pen', 'pencil-line', 'Pen and colour brush (B)'],
-  ['eraser', 'x', 'Eraser (E)'],
-  ['stamp', 'mountains', 'Stamp: place art from the library (S)'],
-  ['scatter', 'tree-evergreen', 'Scatter: paint many stamps at once (R)'],
+  ['pan', 'hand-pointing', 'Move the view (H, or hold Space)', 'Move'],
+  ['select', 'arrows-out-cardinal', 'Select, move, scale and rotate stamps (V)', 'Select'],
+  ['land', 'globe-hemisphere-west', 'Land and water (L)', 'Land'],
+  ['terrain', 'paint-brush', 'Terrain: paint textures onto the land (G)', 'Terrain'],
+  ['text', 'text-t', 'Text: click to add a label, or click one to edit it (T)', 'Text'],
+  ['path', 'path', 'Paths: roads, trails, rivers and borders (P)', 'Path'],
+  ['pen', 'pencil-line', 'Pen and colour brush (B)', 'Pen'],
+  ['eraser', 'eraser', 'Eraser (E)', 'Eraser'],
+  ['stamp', 'mountains', 'Stamp: place art from the library (S)', 'Stamp'],
+  ['scatter', 'tree-evergreen', 'Scatter: paint many stamps at once (R)', 'Scatter'],
 ];
 // The layer each tool draws on.
 const TOOL_LAYER = { land: 'land', terrain: 'land', path: 'stroke', pen: 'stroke', stamp: 'stamp', scatter: 'stamp', text: 'label' };
@@ -52,41 +52,48 @@ export async function viewEditor(view, id) {
       <canvas class="editor-canvas"></canvas>
       <aside class="picker" hidden></aside>
       <div class="toolrail" role="toolbar" aria-label="Tools">
-        ${TOOLS.map(([t, ic, title]) => `<button class="tool" data-tool="${t}" title="${title}" aria-label="${title.replace(/ \(.*/, '')}">${icon(ic)}</button>`).join('')}
+        ${TOOLS.map(([t, ic, title, name]) => `<button class="tool" data-tool="${t}" data-name="${name}" data-key="${title.match(/\(([^)]*)\)$/)[1]}" aria-label="${title.replace(/ \(.*/, '')}">${icon(ic)}</button>`).join('')}
       </div>
+      <div class="tool-tip" hidden></div>
+      <div class="map-hint" hidden><span class="hint-text"></span><button class="icon-btn" data-hint-close aria-label="Dismiss the hint">${icon('x')}</button></div>
+      <div class="pk-preview" hidden></div>
       <div class="toolbar" role="toolbar" aria-label="Tool options">
+        <span class="tb-name"></span><span class="tb-sep"></span>
         <span class="tb-group" data-for="land">
           <span class="seg land-mode"><button type="button" data-landmode="add" title="Paint land (hold Alt for water)">Land</button><button type="button" data-landmode="erase" title="Paint water">Water</button></span>
-          <input type="range" class="land-size" min="0" max="100" step="1" title="Brush size ([ and ])" aria-label="Land brush size">
+          ${opt('Size', 'landSize', '<input type="range" class="land-size" min="0" max="100" step="1" title="Brush size ([ and ])" aria-label="Land brush size">')}
           <button class="brush-chip texture-chip" data-act="textures" title="Land texture" aria-label="Land texture"></button>
         </span>
         <span class="tb-group" data-for="terrain">
           <button class="brush-chip terrain-chip" data-act="terrain-picker" title="Texture to paint" aria-label="Texture to paint"></button>
-          <input type="range" class="terrain-size" min="0" max="100" step="1" title="Brush size ([ and ])" aria-label="Terrain brush size">
-          <input type="range" class="terrain-soft" min="0" max="100" step="1" title="Soft edges" aria-label="Soft edges">
-          <input type="range" class="terrain-opacity" min="10" max="100" step="5" title="Strength: lower lets the land show through" aria-label="Strength">
+          ${opt('Size', 'terrainSize', '<input type="range" class="terrain-size" min="0" max="100" step="1" title="Brush size ([ and ])" aria-label="Terrain brush size">')}
+          ${opt('Soft', 'terrainSoft', '<input type="range" class="terrain-soft" min="0" max="100" step="1" title="Soft edges" aria-label="Soft edges">')}
+          ${opt('Strength', 'terrainOpacity', '<input type="range" class="terrain-opacity" min="10" max="100" step="5" title="Strength: lower lets the land show through" aria-label="Strength">')}
         </span>
         <span class="tb-group" data-for="path">
           <span class="seg path-style">${Object.entries(PATHS).map(([k, [name]]) => `<button type="button" data-pathstyle="${k}">${name}</button>`).join('')}</span>
-          <input type="range" class="path-width" min="2" max="160" step="1" title="Width ([ and ])" aria-label="Path width">
+          ${opt('Width', 'pathWidth', '<input type="range" class="path-width" min="2" max="160" step="1" title="Width ([ and ])" aria-label="Path width">')}
         </span>
         <span class="tb-group" data-for="pen"><span class="swatches">${INKS.map((c) => `<button class="swatch" data-ink="${c}" style="--c:${c}" aria-label="Ink ${c}"></button>`).join('')}
           <input type="color" class="ink-custom" title="Any colour" aria-label="Any colour"></span></span>
-        <span class="tb-group" data-for="pen eraser"><input type="range" class="width" min="0" max="100" step="1" title="Size ([ and ])" aria-label="Pen size"></span>
+        <span class="tb-group" data-for="pen eraser">${opt('Size', 'width', '<input type="range" class="width" min="0" max="100" step="1" title="Size ([ and ])" aria-label="Pen size">')}</span>
         <span class="tb-group" data-for="pen">
-          <input type="range" class="pen-opacity" min="5" max="100" step="5" title="Opacity: lower lets the map show through" aria-label="Opacity">
-          <input type="range" class="pen-soft" min="0" max="100" step="5" title="Soft edges" aria-label="Soft edges">
+          ${opt('Opacity', 'penOpacity', '<input type="range" class="pen-opacity" min="5" max="100" step="5" title="Opacity: lower lets the map show through" aria-label="Opacity">')}
+          ${opt('Soft', 'penSoft', '<input type="range" class="pen-soft" min="0" max="100" step="5" title="Soft edges" aria-label="Soft edges">')}
         </span>
         <span class="tb-group" data-for="stamp scatter">
           <button class="brush-chip" data-act="picker" title="Choose art" aria-label="Choose art"></button>
-          <input type="range" class="stamp-size" min="0" max="100" step="1" title="Stamp size ([ and ])" aria-label="Stamp size">
+          ${opt('Size', 'stampSize', '<input type="range" class="stamp-size" min="0" max="100" step="1" title="Stamp size ([ and ])" aria-label="Stamp size">')}
+          <button class="tool flip stamp-only" data-act="stamp-turn" title="Turn the next stamp 15° (. and , keys; Shift: 45°)" aria-label="Turn the next stamp">${icon('arrow-counter-clockwise')}<b class="badge" data-val="stampRot"></b></button>
+          <button class="tool stamp-only" data-act="stamp-flip" title="Flip the next stamp (F)" aria-label="Flip the next stamp" aria-pressed="false">${icon('flip-horizontal')}</button>
           <button class="tool scatter-only" data-act="scatter-settings" title="Scatter settings: spacing, spread, size and rotation" aria-label="Scatter settings">${icon('gear-six')}</button>
         </span>
         <span class="tb-group" data-for="select">
+          <span class="tb-note"></span>
           <button class="tool" data-act="duplicate" title="Duplicate (Ctrl+D)" aria-label="Duplicate">${icon('plus-circle')}</button>
           <button class="tool" data-act="edit-text" title="Edit the text (Enter)" aria-label="Edit the text">${icon('pencil-simple')}</button>
           <button class="tool" data-act="adjust" title="Opacity, tint and brightness" aria-label="Adjust">${icon('magic-wand')}</button>
-          <button class="tool" data-act="flip" title="Flip (F)" aria-label="Flip">${icon('arrows-clockwise')}</button>
+          <button class="tool" data-act="flip" title="Flip (F)" aria-label="Flip">${icon('flip-horizontal')}</button>
           <button class="tool" data-act="front" title="Bring to front (])" aria-label="Bring to front">${icon('arrow-up')}</button>
           <button class="tool" data-act="back" title="Send to back ([)" aria-label="Send to back">${icon('arrow-down')}</button>
           <button class="tool" data-act="delete" title="Delete (Del)" aria-label="Delete">${icon('trash')}</button>
@@ -94,6 +101,11 @@ export async function viewEditor(view, id) {
         <span class="tb-sep"></span>
         <button class="tool" data-act="undo" title="Undo (Ctrl+Z)" aria-label="Undo">${icon('arrow-counter-clockwise')}</button>
         <button class="tool flip" data-act="redo" title="Redo (Ctrl+Shift+Z)" aria-label="Redo">${icon('arrow-counter-clockwise')}</button>
+        <span class="zoom">
+          <button class="tool small" data-act="zoom-out" title="Zoom out (−)" aria-label="Zoom out">${icon('magnifying-glass-minus')}</button>
+          <button class="zoom-pct" data-act="zoom-100" title="Zoom to 100%" aria-label="Zoom to 100%">100%</button>
+          <button class="tool small" data-act="zoom-in" title="Zoom in (+)" aria-label="Zoom in">${icon('magnifying-glass-plus')}</button>
+        </span>
         <button class="tool" data-act="fit" title="Fit the map (0)" aria-label="Fit the map">${icon('corners-out')}</button>
         <button class="tool" data-act="style" title="Map style" aria-label="Map style">${icon('sparkle')}</button>
         <button class="tool" data-act="layers" title="Layers" aria-label="Layers">${icon('stack')}</button>
@@ -115,6 +127,7 @@ export async function viewEditor(view, id) {
     if (e.store === 'assets') { images.retryMissing(); ed.renderPicker(); }
     ed.renderLayers();
     ed.renderStylePanel();
+    ed.syncHint();
     ed.redraw();
   };
 }
@@ -123,6 +136,10 @@ export async function viewEditor(view, id) {
 // fine-grained for small stamps and still reaches very large ones.
 const sizeFromSlider = (v) => Math.round(16 * Math.pow(128, v / 100));
 const sliderFromSize = (s) => Math.round(100 * Math.log(s / 16) / Math.log(128));
+
+// A slider in the options bar, with a small caption and its live value
+// (filled in by Editor.showValues).
+const opt = (caption, val, input) => `<label class="opt"><span class="opt-cap">${caption} <b data-val="${val}"></b></span>${input}</label>`;
 
 class Editor {
   constructor(root, project, doc) {
@@ -151,6 +168,8 @@ class Editor {
     this.terrainSize = load('ac.terrainSize', 384);
     this.terrainSoft = load('ac.terrainSoft', 0.6);
     this.terrainOpacity = load('ac.terrainOpacity', 1);
+    this.stampRot = 0; this.stampFlip = false; // the next stamp's turn (degrees, clockwise) and mirroring
+    this.hintGone = load('ac.hintGone', false); // the empty-map hint was dismissed on this device
     this.pickerMode = 'stamp'; // or 'texture': what the picker is choosing
     this.locked = new Set(load(`ac.locked.${project.id}`, [])); // layers this device won't edit
     this.activeLayer = load(`ac.layer.${project.id}`, null); // layer new things go on; null: each kind's own
@@ -272,6 +291,8 @@ class Editor {
       ctx.setLineDash([]);
     }
     this.paintBrushPreview();
+    const zoom = (this.zoomEl ??= $('.zoom-pct', this.root)), pct = `${Math.round(this.s * 100)}%`;
+    if (zoom.textContent !== pct) zoom.textContent = pct;
   }
 
   // What the current brush will paint, at its size: under the mouse, and for
@@ -297,7 +318,11 @@ class Editor {
       if (img) {
         const k = size / Math.max(a.w, a.h, 1);
         ctx.globalAlpha = 0.55;
-        ctx.drawImage(img, mx - (a.w * k) / 2, my - (a.h * k) / 2, a.w * k, a.h * k);
+        // The stamp tool's ghost is turned and mirrored the way the next stamp will be.
+        ctx.translate(mx, my);
+        if (tool === 'stamp') { ctx.rotate(this.stampRot * Math.PI / 180); if (this.stampFlip) ctx.scale(-1, 1); }
+        ctx.drawImage(img, -(a.w * k) / 2, -(a.h * k) / 2, a.w * k, a.h * k);
+        ctx.setTransform(this.s * dpr, 0, 0, this.s * dpr, this.x * dpr, this.y * dpr);
         ctx.globalAlpha = 1;
       }
       if (tool === 'scatter') ring(ctx, mx, my, size * this.scatter.spread + size / 2, this.s, true);
@@ -490,6 +515,7 @@ class Editor {
 
   async apply(objs) {
     await store.putObjects(this.project.id, objs);
+    this.syncHint();
     this.redraw();
   }
 
@@ -497,6 +523,7 @@ class Editor {
     this.undoStack.push(entry);
     if (this.undoStack.length > 200) this.undoStack.shift();
     this.redoStack = [];
+    this.syncHistory();
     await this.apply(entry.redo.map((o) => ({ ...o })));
   }
 
@@ -504,6 +531,7 @@ class Editor {
     const e = this.undoStack.pop();
     if (!e) return;
     this.redoStack.push(e);
+    this.syncHistory();
     await this.apply(e.undo.map((o) => ({ ...o })));
   }
 
@@ -511,6 +539,7 @@ class Editor {
     const e = this.redoStack.pop();
     if (!e) return;
     this.undoStack.push(e);
+    this.syncHistory();
     await this.apply(e.redo.map((o) => ({ ...o })));
   }
 
@@ -611,6 +640,7 @@ class Editor {
     for (const b of $$('[data-tool]', this.root)) b.classList.toggle('on', b.dataset.tool === this.tool);
     for (const b of $$('[data-ink]', this.root)) b.classList.toggle('on', b.dataset.ink === this.ink);
     for (const g of $$('.tb-group', this.root)) g.hidden = !g.dataset.for.split(' ').includes(this.tool);
+    $('.tb-name', this.root).textContent = TOOLS.find(([t]) => t === this.tool)[3];
     $('.width', this.root).value = penSlider(this.width);
     $('.pen-opacity', this.root).value = Math.round(this.penOpacity * 100);
     $('.pen-soft', this.root).value = Math.round(this.penSoft * 100);
@@ -625,10 +655,19 @@ class Editor {
     $('.terrain-opacity', this.root).value = Math.round(this.terrainOpacity * 100);
     for (const b of $$('[data-landmode]', this.root)) b.classList.toggle('on', b.dataset.landmode === this.landMode);
     const all = this.selectedObjs(), sel = all.length === 1 ? all[0] : null;
-    for (const b of $$('[data-for="select"] button', this.root)) b.disabled = !all.length;
+    // With nothing selected there's nothing to press: a hint takes the buttons' place.
+    for (const b of $$('[data-for="select"] button', this.root)) b.hidden = !all.length;
+    const note = $('.tb-note', this.root);
+    note.hidden = all.length === 1;
+    note.textContent = all.length ? `${all.length} selected` : matchMedia('(pointer: coarse)').matches ? 'Tap a stamp, label or path' : 'Click a stamp, label or path · drag to select several';
     $('[data-act="edit-text"]', this.root).hidden = sel?.kind !== 'label';
     $('[data-act="flip"]', this.root).hidden = !all.some((o) => o.kind === 'stamp');
     $('.scatter-only', this.root).hidden = this.tool !== 'scatter';
+    for (const b of $$('.stamp-only', this.root)) b.hidden = this.tool !== 'stamp';
+    $('[data-act="stamp-flip"]', this.root).classList.toggle('on', this.stampFlip);
+    $('[data-act="stamp-flip"]', this.root).setAttribute('aria-pressed', this.stampFlip);
+    this.showValues();
+    this.syncHistory();
     const adjustable = all.some((o) => o.kind === 'stamp' || o.kind === 'path');
     $('[data-act="adjust"]', this.root).hidden = !adjustable;
     if (!adjustable) $('.adjust-panel', this.root).hidden = true;
@@ -636,6 +675,37 @@ class Editor {
     this.canvas.style.cursor = panning ? (this.gesture?.kind === 'pan' ? 'grabbing' : 'grab') : this.tool === 'select' ? 'default' : 'crosshair';
     this.renderChip();
   }
+
+  // The numbers beside the options bar's sliders.
+  showValues() {
+    const pct = (v) => `${Math.round(v * 100)}%`;
+    const v = {
+      landSize: this.landSize, terrainSize: this.terrainSize, terrainSoft: pct(this.terrainSoft), terrainOpacity: pct(this.terrainOpacity),
+      pathWidth: this.pathWidth, width: this.width, penOpacity: pct(this.penOpacity), penSoft: pct(this.penSoft), stampSize: this.stampSize,
+      stampRot: this.stampRot ? `${this.stampRot}°` : '',
+    };
+    for (const b of $$('[data-val]', this.root)) b.textContent = v[b.dataset.val];
+  }
+
+  // Undo and redo are only there to press when there's something to do.
+  syncHistory() {
+    $('[data-act="undo"]', this.root).disabled = !this.undoStack.length;
+    $('[data-act="redo"]', this.root).disabled = !this.redoStack.length;
+  }
+
+  // A new map shows a hint until anything is drawn on it, or it's dismissed.
+  syncHint() {
+    const el = $('.map-hint', this.root);
+    const empty = !store.liveObjects(this.doc).some((o) => o.kind !== 'style');
+    el.hidden = !empty || this.hintGone;
+    if (!el.hidden) $('.hint-text', el).textContent = matchMedia('(pointer: coarse)').matches
+      ? 'Start with Land to paint the coast, or Stamp to place art'
+      : 'Start with Land (L) to paint the coast, or Stamp (S) to place art · ? for shortcuts';
+  }
+
+  // Turn the next stamp by deg (clockwise), within one full turn.
+  turnStamp(deg) { this.stampRot = (((this.stampRot + deg) % 360) + 360) % 360; this.syncToolbar(); this.redraw(); }
+  flipStamp() { this.stampFlip = !this.stampFlip; this.syncToolbar(); this.redraw(); }
 
   async renderChip() {
     const chip = $('[data-act="picker"]', this.root);
@@ -657,7 +727,10 @@ class Editor {
     this.renderPicker();
   }
 
-  closePanels() { for (const p of $$('.picker, .side-panel', this.root)) p.hidden = true; }
+  closePanels() {
+    for (const p of $$('.picker, .side-panel', this.root)) p.hidden = true;
+    this.hidePreview();
+  }
 
   togglePanel(cls, render) {
     const p = $(cls, this.root);
@@ -969,7 +1042,7 @@ class Editor {
     const query = (this.pickQuery || '').trim().toLowerCase();
     const tile = (a, cls = '') => {
       const url = A.cachedThumbURL(a.id);
-      return `<button class="tile${cls}" data-id="${a.id}" title="${esc(a.name)}">${url ? `<img src="${url}" alt="" draggable="false">` : icon('image')}</button>`;
+      return `<button class="tile${cls}" data-id="${a.id}" aria-label="${esc(a.name)}">${url ? `<img src="${url}" alt="" draggable="false">` : icon('image')}</button>`;
     };
     const grid = (list) => `<div class="pk-grid">${list.map((a) => tile(a)).join('')}</div>`;
     const catHead = (key, label, count, isOpen, all = true) => `<div class="pk-cat-head" data-toggle="${esc(key)}">
@@ -1055,6 +1128,7 @@ class Editor {
       else this.setLandTexture(id);
     };
     $('[data-close]', el).onclick = () => { el.hidden = true; };
+    this.wirePreview(el);
     $('.pk-multi', el)?.addEventListener('change', (e) => { this.multi = e.target.checked; keep('ac.multi', this.multi); });
     $('[data-plain]', el)?.addEventListener('click', () => { pick(null); this.markPicker(); });
     $('[data-clear]', el)?.addEventListener('click', () => this.setBrush([]));
@@ -1148,6 +1222,68 @@ class Editor {
   // The next new label starts in the style of the last one made or edited.
   rememberStyle({ text, ...style }) { keep('ac.labelStyle', style); }
 
+  // --- hints ----------------------------------------------------------------
+
+  // A tool's name and key beside the rail at once, rather than after the
+  // browser's slow tooltip. Mouse only: a touch has no hover.
+  wireTips() {
+    const rail = $('.toolrail', this.root), tip = $('.tool-tip', this.root);
+    const hide = () => { tip.hidden = true; };
+    this.on(rail, 'pointerover', (e) => {
+      const b = e.pointerType === 'mouse' && e.target.closest('[data-tool]');
+      if (!b) { hide(); return; }
+      tip.innerHTML = `${esc(b.dataset.name)} <kbd>${esc(b.dataset.key)}</kbd>`;
+      // To the right of a rail that stands at the side, above one along the bottom.
+      const side = getComputedStyle(rail).flexDirection === 'column';
+      const r = b.getBoundingClientRect(), o = this.root.getBoundingClientRect();
+      tip.classList.toggle('above', !side);
+      tip.style.left = `${(side ? r.right + 8 : r.left + r.width / 2) - o.left}px`;
+      tip.style.top = `${(side ? r.top + r.height / 2 : r.top - 8) - o.top}px`;
+      tip.hidden = false;
+    });
+    this.on(rail, 'pointerleave', hide);
+    this.on(rail, 'pointerdown', hide);
+  }
+
+  // Hovering a picture in the picker (mouse only) shows it larger, with its
+  // name, beside the picker. Only the preview is touched, never the picker's
+  // own markup, so choosing a picture can't make the thumbnails reload.
+  hidePreview() {
+    clearTimeout(this.pvTimer);
+    this.pvTile = null;
+    $('.pk-preview', this.root).hidden = true;
+  }
+
+  wirePreview(el) {
+    const tip = $('.pk-preview', this.root);
+    this.hidePreview();
+    el.onpointerover = (e) => {
+      if (e.pointerType !== 'mouse') return;
+      const t = e.target.closest('.tile');
+      if (!t) { this.hidePreview(); return; }
+      if (t === this.pvTile) return;
+      this.pvTile = t;
+      clearTimeout(this.pvTimer);
+      // Once one is showing, the next follows quickly.
+      this.pvTimer = setTimeout(() => this.showPreview(t), tip.hidden ? 300 : 90);
+    };
+    el.onpointerleave = () => this.hidePreview();
+    el.onpointerdown = () => this.hidePreview();
+    $('.pk-browse', el)?.addEventListener('scroll', () => this.hidePreview());
+  }
+
+  async showPreview(t) {
+    const a = A.asset(t.dataset.id);
+    const url = a && (A.cachedThumbURL(a.id) || await A.thumbURL(a.id));
+    if (!url || this.pvTile !== t || !t.isConnected) return;
+    const tip = $('.pk-preview', this.root);
+    tip.innerHTML = `<span class="pv-pic"><img src="${url}" alt=""></span><b>${esc(a.name)}</b><small>${esc(a.pack)}${a.category ? ` · ${esc(a.category)}` : ''}</small>`;
+    const o = this.root.getBoundingClientRect(), p = $('.picker', this.root).getBoundingClientRect(), r = t.getBoundingClientRect();
+    tip.hidden = false;
+    tip.style.right = `${o.right - p.left + 8}px`;
+    tip.style.top = `${Math.max(8, Math.min(r.top - o.top + r.height / 2 - tip.offsetHeight / 2, o.height - tip.offsetHeight - 8))}px`;
+  }
+
   // --- input ------------------------------------------------------------
 
   wire() {
@@ -1162,6 +1298,11 @@ class Editor {
       if (act === 'undo') this.undo();
       else if (act === 'redo') this.redo();
       else if (act === 'fit') this.fit();
+      else if (act === 'zoom-in') this.zoomAt(this.vw / 2, this.vh / 2, 1.25);
+      else if (act === 'zoom-out') this.zoomAt(this.vw / 2, this.vh / 2, 0.8);
+      else if (act === 'zoom-100') this.zoomAt(this.vw / 2, this.vh / 2, 1 / this.s);
+      else if (act === 'stamp-turn') this.turnStamp(e.shiftKey ? 45 : 15);
+      else if (act === 'stamp-flip') this.flipStamp();
       else if (act === 'picker') this.togglePicker('stamp');
       else if (act === 'textures') this.togglePicker('texture');
       else if (act === 'flip') this.flipSelected();
@@ -1179,6 +1320,10 @@ class Editor {
     };
     $('.toolbar', this.root).onclick = onBar;
     $('.toolrail', this.root).onclick = onBar;
+    // Slider handlers set the value first; this then updates the numbers beside them.
+    $('.toolbar', this.root).addEventListener('input', () => this.showValues());
+    $('[data-hint-close]', this.root).onclick = () => { this.hintGone = true; keep('ac.hintGone', true); this.syncHint(); };
+    this.wireTips();
     $('.width', this.root).oninput = (e) => { this.flashSize(); this.width = penWidth(+e.target.value); keep('ac.width', this.width); };
     $('.pen-opacity', this.root).oninput = (e) => { this.penOpacity = +e.target.value / 100; keep('ac.penOpacity', this.penOpacity); };
     $('.pen-soft', this.root).oninput = (e) => { this.penSoft = +e.target.value / 100; keep('ac.penSoft', this.penSoft); };
@@ -1190,6 +1335,7 @@ class Editor {
     $('.terrain-soft', this.root).oninput = (e) => { this.terrainSoft = +e.target.value / 100; keep('ac.terrainSoft', this.terrainSoft); };
     $('.terrain-opacity', this.root).oninput = (e) => { this.terrainOpacity = +e.target.value / 100; keep('ac.terrainOpacity', this.terrainOpacity); };
     this.syncToolbar();
+    this.syncHint();
 
     const c = this.canvas;
     this.ro = new ResizeObserver(() => this.resize());
@@ -1272,6 +1418,9 @@ class Editor {
     else if (k === '+' || k === '=') this.zoomAt(this.vw / 2, this.vh / 2, 1.25);
     else if (k === '-') this.zoomAt(this.vw / 2, this.vh / 2, 0.8);
     else if (any && k === 'f') this.flipSelected();
+    // With nothing selected, the stamp tool's F and , . set up the next stamp (by key position, so Shift still works).
+    else if (this.tool === 'stamp' && k === 'f') this.flipStamp();
+    else if (this.tool === 'stamp' && (e.code === 'Comma' || e.code === 'Period')) this.turnStamp((e.code === 'Comma' ? -1 : 1) * (e.shiftKey ? 45 : 15));
     else if (any && k === ']') this.toFront();
     else if (any && k === '[') this.toBack();
     else if (k === '[' || k === ']') {
@@ -1336,7 +1485,7 @@ class Editor {
     } else if (this.tool === 'select') {
       this.gesture = this.selectGesture(pt, mx, my, e) || { kind: 'pan', last: pt };
     } else if (this.tool === 'stamp') {
-      const o = this.newStamp(mx, my, this.stampSize);
+      const o = this.newStamp(mx, my, this.stampSize, { flip: this.stampFlip, rot: this.stampRot * Math.PI / 180 });
       if (!o) { this.openPicker(); toast('Choose some art first'); return; }
       o.z = this.nextZ();
       this.doc.objects[o.id] = o;
@@ -1695,6 +1844,7 @@ export const SHORTCUTS = [
   ['Tools', [['H, or hold Space', 'Move the view'], ['V', 'Select'], ['L', 'Land and water'], ['G', 'Terrain'], ['P', 'Paths'], ['T', 'Text'],
     ['B', 'Pen and colour brush'], ['E', 'Eraser'], ['S', 'Stamp'], ['R', 'Scatter']]],
   ['While painting', [['[  ]', 'Smaller / larger brush or stamp'], ['Alt (hold)', 'Land ↔ water'], ['Shift (rotating)', 'Turn in 15° steps'],
+    [',  .', 'Turn the next stamp 15° (Shift: 45°)'], ['F', 'Flip the next stamp (with nothing selected)'],
     ['Ctrl / Cmd click a picture', 'Pick several stamps to place at random']]],
   ['Selection', [['Drag on empty map, Shift-click', 'Select several'], ['Arrows (Shift: ×10)', 'Nudge'], ['F', 'Flip'],
     ['[  ]', 'Send back / bring forward'], ['Enter, or double-click', 'Edit a label'], ['Alt-click, or double-click a point', 'Remove a path point'],
