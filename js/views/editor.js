@@ -79,15 +79,15 @@ export async function viewEditor(view, id) {
       <div class="toolbar" role="toolbar" aria-label="Tool options">
         <span class="tb-name"></span><span class="tb-sep"></span>
         <span class="tb-group" data-for="land">
-          <span class="seg land-mode"><button type="button" data-landmode="add" title="Paint land (hold Alt for water)">Land</button><button type="button" data-landmode="erase" title="Paint water">Water</button></span>
+          <span class="seg land-mode"><button type="button" data-landmode="add" title="Paint land (X swaps; hold Alt for one water stroke)">Land</button><button type="button" data-landmode="erase" title="Paint water (X swaps)">Water</button></span>
           ${opt('Size', 'landSize', '<input type="range" class="land-size" min="0" max="100" step="1" title="Brush size ([ and ])" aria-label="Land brush size">')}
           <button class="brush-chip texture-chip" data-act="textures" title="Land texture" aria-label="Land texture"></button>
         </span>
         <span class="tb-group" data-for="terrain">
           <button class="brush-chip terrain-chip" data-act="terrain-picker" title="Texture to paint" aria-label="Texture to paint"></button>
           ${opt('Size', 'terrainSize', '<input type="range" class="terrain-size" min="0" max="100" step="1" title="Brush size ([ and ])" aria-label="Terrain brush size">')}
-          ${opt('Soft', 'terrainSoft', '<input type="range" class="terrain-soft" min="0" max="100" step="1" title="Soft edges" aria-label="Soft edges">')}
-          ${opt('Strength', 'terrainOpacity', '<input type="range" class="terrain-opacity" min="10" max="100" step="5" title="Strength: lower lets the land show through" aria-label="Strength">')}
+          ${opt('Soft', 'terrainSoft', '<input type="range" class="terrain-soft" min="0" max="100" step="1" title="Soft edges (Shift [ and ])" aria-label="Soft edges">')}
+          ${opt('Strength', 'terrainOpacity', '<input type="range" class="terrain-opacity" min="10" max="100" step="5" title="Strength: lower lets the land show through (1 … 9, 0)" aria-label="Strength">')}
         </span>
         <span class="tb-group" data-for="path">
           <span class="seg path-style">${Object.entries(PATHS).map(([k, [name]]) => `<button type="button" data-pathstyle="${k}">${name}</button>`).join('')}</span>
@@ -97,8 +97,8 @@ export async function viewEditor(view, id) {
           <input type="color" class="ink-custom" title="Any colour" aria-label="Any colour"></span></span>
         <span class="tb-group" data-for="pen eraser">${opt('Size', 'width', '<input type="range" class="width" min="0" max="100" step="1" title="Size ([ and ])" aria-label="Pen size">')}</span>
         <span class="tb-group" data-for="pen">
-          ${opt('Opacity', 'penOpacity', '<input type="range" class="pen-opacity" min="5" max="100" step="5" title="Opacity: lower lets the map show through" aria-label="Opacity">')}
-          ${opt('Soft', 'penSoft', '<input type="range" class="pen-soft" min="0" max="100" step="5" title="Soft edges" aria-label="Soft edges">')}
+          ${opt('Opacity', 'penOpacity', '<input type="range" class="pen-opacity" min="5" max="100" step="5" title="Opacity: lower lets the map show through (1 … 9, 0)" aria-label="Opacity">')}
+          ${opt('Soft', 'penSoft', '<input type="range" class="pen-soft" min="0" max="100" step="5" title="Soft edges (Shift [ and ])" aria-label="Soft edges">')}
         </span>
         <span class="tb-group" data-for="stamp scatter">
           <button class="brush-chip" data-act="picker" title="Choose art" aria-label="Choose art"></button>
@@ -1568,6 +1568,12 @@ class Editor {
     this.on(c, 'wheel', (e) => {
       e.preventDefault();
       const [cx, cy] = this.local(e);
+      // Alt + wheel sizes the brush, a step per notch (trackpads send many small ones).
+      if (e.altKey && !e.ctrlKey && !e.metaKey) {
+        this.wheelSize = (this.wheelSize || 0) + (e.deltaY || e.deltaX);
+        if (Math.abs(this.wheelSize) >= 50) { this.resizeBrush(this.wheelSize < 0); this.wheelSize = 0; }
+        return;
+      }
       if (e.ctrlKey || e.metaKey || Math.abs(e.deltaX) < 1) this.zoomAt(cx, cy, Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0015)));
       else { this.x -= e.deltaX; this.y -= e.deltaY; this.redraw(); }
     }, { passive: false });
@@ -1591,6 +1597,7 @@ class Editor {
     if (mod && k === 'a') { e.preventDefault(); this.select(this.selectable().map((o) => o.id)); if (this.tool !== 'select') this.setTool('select'); this.syncToolbar(); this.redrawOverlay(); return; }
     // Everything saves as you go; don't let the browser offer to save the page.
     if (mod && k === 's') { e.preventDefault(); toast('Saved: every change is kept as you make it'); return; }
+    if (mod && k === '0') { e.preventDefault(); this.fit(); return; }
     if (mod) return;
     if (e.key === ' ') {
       e.preventDefault();
@@ -1615,6 +1622,23 @@ class Editor {
     // Escape first drops whatever is half done (a stroke, a box, a move).
     if (e.key === 'Escape' && this.gesture && this.gesture.kind !== 'pinch') { this.restore(this.gesture); this.gesture = null; this.pointers.clear(); this.syncToolbar(); this.redraw(); return; }
     if (e.key === 'Escape') { this.sel.clear(); this.closePanels(); this.syncToolbar(); this.redrawOverlay(); return; }
+    // Brush settings, as in painting apps: Shift [ ] softness, 1–9 and 0
+    // opacity (10–90%, 100%), X land ↔ water. Digits are by key position, so
+    // they work on keyboards where the number row needs Shift.
+    const digit = /^Digit(\d)$/.exec(e.code)?.[1];
+    if (!any && e.shiftKey && (e.code === 'BracketLeft' || e.code === 'BracketRight')) {
+      if (this.brushSetting('soft', e.code === 'BracketRight' ? 0.1 : -0.1)) e.preventDefault();
+      return;
+    }
+    if (digit != null && !e.shiftKey && !e.altKey && this.brushSetting('opacity', null, digit === '0' ? 1 : +digit / 10)) { e.preventDefault(); return; }
+    if (k === 'x' && this.tool === 'land') {
+      this.landMode = this.landMode === 'add' ? 'erase' : 'add';
+      keep('ac.landMode', this.landMode);
+      this.syncToolbar();
+      this.redrawOverlay();
+      toast(this.landMode === 'add' ? 'Painting land' : 'Painting water', 1200);
+      return;
+    }
     if (KEYS[k]) this.setTool(KEYS[k]);
     else if (k === '0') this.fit();
     else if (k === '+' || k === '=') this.zoomAt(this.vw / 2, this.vh / 2, 1.25);
@@ -1625,27 +1649,45 @@ class Editor {
     else if (this.tool === 'stamp' && (e.code === 'Comma' || e.code === 'Period')) this.turnStamp((e.code === 'Comma' ? -1 : 1) * (e.shiftKey ? 45 : 15));
     else if (any && k === ']') this.toFront();
     else if (any && k === '[') this.toBack();
-    else if (k === '[' || k === ']') {
-      const up = k === ']';
-      if (this.tool === 'stamp' || this.tool === 'scatter') {
-        this.stampSize = Math.max(16, Math.min(2048, Math.round(this.stampSize * (up ? 1.15 : 1 / 1.15))));
-        keep('ac.stampSize', this.stampSize);
-      } else if (this.tool === 'land') {
-        this.landSize = Math.max(16, Math.min(2048, Math.round(this.landSize * (up ? 1.15 : 1 / 1.15))));
-        keep('ac.landSize', this.landSize);
-      } else if (this.tool === 'path') {
-        this.pathWidth = Math.max(2, Math.min(160, Math.round(this.pathWidth * (up ? 1.2 : 1 / 1.2))));
-        keep('ac.pathWidth', this.pathWidth);
-      } else if (this.tool === 'terrain') {
-        this.terrainSize = Math.max(16, Math.min(2048, Math.round(this.terrainSize * (up ? 1.15 : 1 / 1.15))));
-        keep('ac.terrainSize', this.terrainSize);
-      } else {
-        this.width = Math.max(2, Math.min(800, Math.round(this.width * (up ? 1.2 : 1 / 1.2))));
-        keep('ac.width', this.width);
-      }
-      this.syncToolbar();
-      this.flashSize();
+    else if (k === '[' || k === ']') this.resizeBrush(k === ']');
+  }
+
+  // [ ] and Alt + wheel: the current tool's size. False for tools without one.
+  resizeBrush(up) {
+    if (!['pen', 'eraser', 'land', 'terrain', 'path', 'stamp', 'scatter'].includes(this.tool)) return false;
+    if (this.tool === 'stamp' || this.tool === 'scatter') {
+      this.stampSize = Math.max(16, Math.min(2048, Math.round(this.stampSize * (up ? 1.15 : 1 / 1.15))));
+      keep('ac.stampSize', this.stampSize);
+    } else if (this.tool === 'land') {
+      this.landSize = Math.max(16, Math.min(2048, Math.round(this.landSize * (up ? 1.15 : 1 / 1.15))));
+      keep('ac.landSize', this.landSize);
+    } else if (this.tool === 'path') {
+      this.pathWidth = Math.max(2, Math.min(160, Math.round(this.pathWidth * (up ? 1.2 : 1 / 1.2))));
+      keep('ac.pathWidth', this.pathWidth);
+    } else if (this.tool === 'terrain') {
+      this.terrainSize = Math.max(16, Math.min(2048, Math.round(this.terrainSize * (up ? 1.15 : 1 / 1.15))));
+      keep('ac.terrainSize', this.terrainSize);
+    } else {
+      this.width = Math.max(2, Math.min(800, Math.round(this.width * (up ? 1.2 : 1 / 1.2))));
+      keep('ac.width', this.width);
     }
+    this.syncToolbar();
+    this.flashSize();
+    return true;
+  }
+
+  // Shift [ ] and the number keys: soft edges and opacity (strength, for
+  // terrain) of the tools that have them. Steps by delta, or sets value.
+  brushSetting(which, delta, value) {
+    const field = { pen: { soft: 'penSoft', opacity: 'penOpacity' }, terrain: { soft: 'terrainSoft', opacity: 'terrainOpacity' } }[this.tool]?.[which];
+    if (!field) return false;
+    const min = which === 'soft' ? 0 : this.tool === 'pen' ? 0.05 : 0.1;
+    this[field] = Math.round(Math.max(min, Math.min(1, value ?? this[field] + delta)) * 100) / 100;
+    keep('ac.' + field, this[field]);
+    this.syncToolbar();
+    this.redrawOverlay();
+    toast(`${which === 'soft' ? 'Softness' : this.tool === 'terrain' ? 'Strength' : 'Opacity'} ${Math.round(this[field] * 100)}%`, 1000);
+    return true;
   }
 
   down(e) {
@@ -2050,14 +2092,15 @@ function ring(ctx, x, y, r, scale, dashed = false) {
 export const SHORTCUTS = [
   ['Tools', [['H, or hold Space', 'Move the view'], ['V', 'Select'], ['L', 'Land and water'], ['G', 'Terrain'], ['P', 'Paths'], ['T', 'Text'],
     ['B', 'Pen and colour brush'], ['E', 'Eraser'], ['S', 'Stamp'], ['R', 'Scatter']]],
-  ['While painting', [['[  ]', 'Smaller / larger brush or stamp'], ['Alt (hold)', 'Land ↔ water'], ['Shift (rotating)', 'Turn in 15° steps'],
+  ['While painting', [['[  ], or Alt + wheel', 'Smaller / larger brush or stamp'], ['Shift [  ]', 'Softer / harder edges (pen, terrain)'],
+    ['1 … 9, 0', 'Opacity or strength 10 … 90%, 100% (pen, terrain)'], ['X', 'Swap land and water'], ['Alt (hold)', 'Land ↔ water for one stroke'], ['Shift (rotating)', 'Turn in 15° steps'],
     [',  .', 'Turn the next stamp 15° (Shift: 45°)'], ['F', 'Flip the next stamp (with nothing selected)'],
     ['Ctrl / Cmd click a picture', 'Pick several stamps to place at random']]],
   ['Selection', [['Drag on empty map, Shift-click', 'Select several'], ['Arrows (Shift: ×10)', 'Nudge'], ['F', 'Flip'],
     ['[  ]', 'Send back / bring forward'], ['Enter, or double-click', 'Edit a label'], ['Alt-click, or double-click a point', 'Remove a path point'],
     ['Del', 'Delete'], ['Esc', 'Cancel what’s half done, then clear the selection']]],
   ['Everywhere', [['Ctrl Z / Ctrl Shift Z (or Y)', 'Undo / redo'], ['Ctrl C / X / V', 'Copy, cut, paste (also between maps)'], ['Ctrl D', 'Duplicate'],
-    ['Ctrl A', 'Select all'], ['0', 'Fit the map'], ['+  −, or the wheel', 'Zoom'], ['?', 'This list']]],
+    ['Ctrl A', 'Select all'], ['0, or Ctrl 0', 'Fit the map (Ctrl 0 while painting)'], ['+  −, or the wheel', 'Zoom'], ['?', 'This list']]],
 ];
 
 function showShortcuts() {
