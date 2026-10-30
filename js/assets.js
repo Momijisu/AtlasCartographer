@@ -7,8 +7,12 @@
 // files (see assetsync.js): every device fetches the small thumbnails, and
 // full-size art only when it's needed or its pack is kept offline.
 //
-// Packs and categories come from folders: the top folder of an import is the
-// pack, and the folders inside it are categories.
+// Packs, categories and stamps come from folders: the top folder of an import
+// is the pack, the folders inside it are categories (groups of art), and a
+// folder inside a category is one stamp, whose pictures are its variations:
+//   Pack / babylonian / gate-arch / gate-arch-1.png, gate-arch-2.png …
+// Pictures straight in a category are stamps of their own, except that
+// numbered names ("Tower 1", "Tower 2") are variations of one.
 import * as db from './db.js';
 import { meta, saveMeta, notify } from './store.js';
 
@@ -51,30 +55,63 @@ export const byName = (a, b) => collator.compare(a.name, b.name);
 // (and sorted when a category is first looked at), not on every redraw of a
 // list. Thousands of assets in hundreds of categories would otherwise be
 // searched once per category each time.
-const memo = { at: -1, packs: null, groups: null, sorted: new Map() };
+const memo = { at: -1, packs: null, groups: null, sorted: new Map(), sets: new Map() };
 function fresh() {
   if (memo.at === version) return;
   memo.at = version;
   memo.packs = null;
   memo.sorted.clear();
+  memo.sets.clear();
   memo.groups = new Map();
   for (const a of liveAssets()) {
-    const key = `${a.pack}\u0000${a.category}`;
+    const key = `${a.pack}\u0000${groupOf(a)}`;
     const list = memo.groups.get(key);
     if (list) list.push(a); else memo.groups.set(key, [a]);
   }
 }
+// Every picture in a category, stamp by stamp (variations together).
 export function categoryAssets(pack, category) {
   fresh();
   const key = `${pack}\u0000${category}`;
   let list = memo.sorted.get(key);
-  if (!list) memo.sorted.set(key, list = (memo.groups.get(key) || []).slice().sort(byName));
+  if (!list) memo.sorted.set(key, list = categorySets(pack, category).flatMap((s) => s.items));
   return list;
+}
+
+// A category's stamps: [{ key, name, items }], items being its variations.
+export function categorySets(pack, category) {
+  fresh();
+  const key = `${pack}\u0000${category}`;
+  let sets = memo.sets.get(key);
+  if (!sets) {
+    const by = new Map();
+    for (const a of memo.groups.get(key) || []) {
+      const k = setOf(a);
+      if (by.has(k)) by.get(k).push(a); else by.set(k, [a]);
+    }
+    // (A key safe in HTML attributes, which can't hold \u0000.)
+    sets = [...by].map(([k, items]) => { items.sort(byName); return { key: `${pack}\u241f${category}\u241f${k}`, name: setLabel(items[0], items), items }; })
+      .sort((x, y) => collator.compare(x.name, y.name));
+    memo.sets.set(key, sets);
+  }
+  return sets;
+}
+
+// The variations of the stamp a picture belongs to (itself, if none).
+export function variationsOf(a) {
+  const k = setOf(a);
+  return categorySets(a.pack, groupOf(a)).find((s) => s.items[0] && setOf(s.items[0]) === k)?.items || [a];
 }
 
 // A picture's set: its name without a number at the end, so "Tower 1",
 // "Tower_2" and "Tower (3)" are variants of one thing.
 export const setName = (name) => name.replace(/[\s_-]*\(?\d+\)?$/, '').toLowerCase() || name.toLowerCase();
+// A picture's category (its group: the first folder in the pack) and the
+// stamp it's a variation of (the folders below that, or its numberless name).
+export const groupOf = (a) => { const i = a.category.indexOf('/'); return i < 0 ? a.category : a.category.slice(0, i); };
+export const setOf = (a) => { const i = a.category.indexOf('/'); return i < 0 ? setName(a.name) : a.category.slice(i + 1); };
+// The stamp's display name: its folder's name, or its first picture's.
+const setLabel = (a, list) => { const i = a.category.indexOf('/'); return i < 0 ? (list.length > 1 ? a.name.replace(/[\s_-]*\(?\d+\)?$/, '') || a.name : a.name) : a.category.slice(i + 1); };
 
 export function packs() {
   fresh();
@@ -88,9 +125,10 @@ function buildPacks() {
     if (!p) by.set(a.pack, p = { name: a.pack, count: 0, bytes: 0, cats: new Map(), type: 'any' });
     if (a.mapType && p.type === 'any') p.type = a.mapType;
     p.count++; p.bytes += a.size || 0;
-    const c = p.cats.get(a.category) || { name: a.category, count: 0, kind: a.kind };
+    const g = groupOf(a);
+    const c = p.cats.get(g) || { name: g, count: 0, kind: a.kind };
     c.count++;
-    p.cats.set(a.category, c);
+    p.cats.set(g, c);
   }
   return [...by.values()].sort((x, y) => collator.compare(x.name, y.name)).map((p) => ({
     ...p, categories: [...p.cats.values()].sort((x, y) => collator.compare(x.name, y.name)),
@@ -124,7 +162,7 @@ export async function setPackType(pack, type) {
 }
 
 export async function setCategoryKind(pack, category, kind) {
-  await saveRecords(liveAssets().filter((a) => a.pack === pack && a.category === category && a.kind !== kind).map((a) => ({ ...a, kind })));
+  await saveRecords(liveAssets().filter((a) => a.pack === pack && groupOf(a) === category && a.kind !== kind).map((a) => ({ ...a, kind })));
 }
 
 export async function setPinned(pack, on) {
@@ -246,7 +284,10 @@ export async function importEntries(entries, pack, onProgress = () => {}, opts =
   const progress = { done: 0, total: list.length, added: 0, skipped: 0 };
   const seen = new Set(); // ids taken by this import, before they are in the catalogue
   // Images added to an existing pack take on what it's made for.
-  const mapType = packs().find((p) => p.name === pack)?.type ?? opts.mapType;
+  const existing = packs().find((p) => p.name === pack);
+  const mapType = existing?.type ?? opts.mapType;
+  // Pictures added to a category that's already there are stamps or textures as it is.
+  const kindOf = new Map((existing?.categories || []).map((c) => [c.name, c.kind]));
   let ready = [];
   let saving = Promise.resolve();
   const flush = () => {
@@ -281,7 +322,7 @@ export async function importEntries(entries, pack, onProgress = () => {}, opts =
         const parts = e.path.split('/');
         const file = parts.pop();
         const category = e.category ?? parts.join('/');
-        const kind = e.kind === 'texture' || e.kind === 'stamp' ? e.kind : guessKind(category);
+        const kind = e.kind === 'texture' || e.kind === 'stamp' ? e.kind : kindOf.get(category.split('/')[0]) || guessKind(category);
         ready.push({ blob, thumb, rec: { id, name: e.name || file.replace(/\.[^.]+$/, ''), pack, category, kind, type, size: blob.size, w, h, ...(mapType && mapType !== 'any' ? { mapType } : {}) } });
         progress.added++;
       } catch (err) {

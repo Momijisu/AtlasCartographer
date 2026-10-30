@@ -17,7 +17,7 @@ A fantasy map maker for phone and PC, and a companion to [WorldAtlas](https://gi
 - A pen and colour brush from fine lines to broad washes, with opacity and soft edges
 - Layers you can add, rename, reorder, hide and lock
 - Map style: sea, land and coast colours, coast width, rippled, hatched or plain shores, stamp shadows, a paper texture, square or hex grids, darker edges, a frame and a scale bar
-- An art library: import a folder or zip of images, whose folders become packs and categories; export any pack as a single `.atlaspack` file and import it on another device or install; tag packs by map type, browse them with previews, search everything, and see what you've used recently
+- An art library: import a folder or zip of images laid out as pack / category / stamp / variations (a folder of pictures inside a category is one stamp, its pictures its variations; numbered names like "Tower 1", "Tower 2" count too); the picker shows one tile per stamp with its variations a tap away, placed at random or one at a time; export any pack as a single `.atlaspack` file and import it on another device or install; tag packs by map type, browse them with previews, search everything, and see what you've used recently
 - Export to PNG, WebP or JPEG at full size or smaller, ready to upload to WorldAtlas Maps
 - Duplicate a map, or change its size by scaling everything or changing the canvas
 - Inkarnate's keyboard layout (W/S size, E/D opacity, Q/A softness, F catalogue, and the rest), plus grouping, locking and snapping to the grid; press **K** or **?** in the editor for the list

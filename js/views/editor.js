@@ -6,6 +6,7 @@
 import * as store from '../store.js';
 import * as A from '../assets.js';
 import * as images from '../images.js';
+import * as assetsync from '../assetsync.js';
 import { $, $$, esc, uid, toast, modal } from '../util.js';
 import { icon } from '../icons.js';
 import { setTitle, state } from '../ui.js';
@@ -116,7 +117,8 @@ export async function viewEditor(view, id) {
         </span>
         <span class="tb-group" data-for="stamp scatter">
           <span class="seg place-mode" title="Place one stamp per click, or paint many"><button type="button" data-place="stamp">One</button><button type="button" data-place="scatter">Many</button></span>
-          <button class="brush-chip" data-act="picker" title="Choose art (F) · Alt ← → for the next in its set" aria-label="Choose art"></button>
+          <button class="brush-chip" data-act="picker" title="Choose art (F) · Alt ← → for the next variation" aria-label="Choose art"></button>
+          <button class="tool" data-act="stamp-random" title="Random variation: each stamp placed is one of its variations, at random" aria-label="Random variation" aria-pressed="false">${icon('dice')}</button>
           ${opt('Size', 'stampSize', '<input type="range" class="stamp-size" min="0" max="100" step="1" title="Stamp size (W and S)" aria-label="Stamp size">')}
           ${opt('Opacity', 'stampOpacity', '<input type="range" class="stamp-opacity" min="5" max="100" step="5" title="Opacity of new stamps (E and D)" aria-label="Stamp opacity">')}
           <button class="tool flip stamp-only" data-act="stamp-turn" title="Turn the next stamp 15° (> and <)" aria-label="Turn the next stamp">${icon('arrow-counter-clockwise')}<b class="badge" data-val="stampRot"></b></button>
@@ -236,6 +238,7 @@ class Editor {
     this.penSoft = load('ac.penSoft', 0);
     this.stampSize = load('ac.stampSize', 256);
     this.stampOpacity = load('ac.stampOpacity', 1); // of new stamps
+    this.stampRandom = load('ac.stampRandom', true); // a stamp's tile picks all its variations, placed at random
     this.shapeKind = load('ac.shapeKind', 'rect');
     this.shapeMode = 'add';
     this.shapeMerge = load('ac.shapeMerge', true);
@@ -272,6 +275,8 @@ class Editor {
     this.disposers = [];
     this.wire();
     this.disposers.push(images.onLoad(() => this.redraw()));
+    // Previews still coming down from OneDrive fill in the picker as they arrive.
+    this.disposers.push(assetsync.onProgress((p, fresh) => { if (fresh) this.fillThumbs(); }));
     this.resize();
     this.fit();
   }
@@ -914,6 +919,8 @@ class Editor {
     $('.scatter-only', this.root).hidden = this.tool !== 'scatter';
     for (const b of $$('.stamp-only', this.root)) b.hidden = this.tool !== 'stamp';
     $('[data-act="stamp-flip"]', this.root).classList.toggle('on', this.stampFlip);
+    $('[data-act="stamp-random"]', this.root).classList.toggle('on', this.stampRandom);
+    $('[data-act="stamp-random"]', this.root).setAttribute('aria-pressed', this.stampRandom);
     $('[data-act="stamp-flip"]', this.root).setAttribute('aria-pressed', this.stampFlip);
     this.showValues();
     this.syncHistory();
@@ -950,6 +957,17 @@ class Editor {
     if (!el.hidden) $('.hint-text', el).textContent = matchMedia('(pointer: coarse)').matches
       ? 'Start with Land to paint the coast, or Stamp to place art'
       : 'Start with Land (M) to paint the coast, or Stamp (O) to place art · ? for shortcuts';
+  }
+
+  // Random on: the chosen stamps' variations all go into the brush; off: just
+  // the first chosen picture (Alt ← → then steps through the variations).
+  setStampRandom(on) {
+    this.stampRandom = on;
+    keep('ac.stampRandom', on);
+    const chosen = this.brush.map((id) => A.asset(id)).filter(Boolean);
+    if (chosen.length) this.setBrush(on ? [...new Set(chosen.flatMap((a) => A.variationsOf(a).map((v) => v.id)))] : [chosen[0].id]);
+    this.syncToolbar();
+    toast(on ? 'Random variation on' : 'One variation: Alt ← → to change it', 1400);
   }
 
   // Turn the next stamp by deg (clockwise), within one full turn.
@@ -1318,17 +1336,33 @@ class Editor {
     const byName = A.byName;
     const open = this.pickOpen(kind);
     const query = (this.pickQuery || '').trim().toLowerCase();
-    const tile = (a, cls = '') => {
+    const tile = (a, cls = '', st = null) => {
       const url = A.cachedThumbURL(a.id);
-      return `<button class="tile${cls}" data-id="${a.id}" aria-label="${esc(a.name)}">${url ? `<img src="${url}" alt="" draggable="false">` : icon('image')}</button>`;
+      const name = st ? st.name : a.name;
+      return `<button class="tile${cls}" data-id="${a.id}"${st ? ` data-set="${esc(st.key)}"` : ''} aria-label="${esc(name)}" title="${esc(name)}${st?.items.length > 1 ? ` · ${st.items.length} variations` : ''}">${url ? `<img src="${url}" alt="" draggable="false">` : icon('image')}</button>`;
     };
-    // A long category shows its first tiles; the rest come on request (a
+    // A stamp shows as one tile, its first variation, with a badge counting
+    // the rest; the badge shows them (and hides them again) beside it.
+    this.pickSets = new Map(); // stamp key → its variations' ids
+    this.pickSetOpen ??= new Set();
+    const setTile = (st, cls = '') => {
+      this.pickSets.set(st.key, st.items.map((a) => a.id));
+      const n = st.items.length, isOpen = n > 1 && this.pickSetOpen.has(st.key);
+      return `<span class="pk-set${isOpen ? ' open' : ''}">${tile(st.items[0], cls, st)}${n > 1 ? `<button class="pk-badge" data-expand="${esc(st.key)}" title="${isOpen ? 'Hide' : 'Show'} the ${n} variations" aria-label="${isOpen ? 'Hide' : 'Show'} the ${n} variations">${isOpen ? '−' : n}</button>` : ''}</span>`
+        + (isOpen ? st.items.map((a) => tile(a, `${cls} variant`)).join('') : '');
+    };
+    // A long category shows its first stamps; the rest come on request (a
     // category can hold thousands, and every tile is a button and a picture).
     const SHOWN = 120;
     const grid = (list, key) => {
       const more = list.length > SHOWN && !this.pickAll.has(key);
       return `<div class="pk-grid">${(more ? list.slice(0, SHOWN) : list).map((a) => tile(a)).join('')}</div>`
         + (more ? `<div class="pk-actions"><button class="btn small quiet" data-showall="${esc(key)}">Show all ${list.length.toLocaleString()}</button></div>` : '');
+    };
+    const setGrid = (sets, key) => {
+      const more = sets.length > SHOWN && !this.pickAll.has(key);
+      return `<div class="pk-grid">${(more ? sets.slice(0, SHOWN) : sets).map((st) => setTile(st)).join('')}</div>`
+        + (more ? `<div class="pk-actions"><button class="btn small quiet" data-showall="${esc(key)}">Show all ${sets.length.toLocaleString()}</button></div>` : '');
     };
     const catHead = (key, label, count, isOpen, all = true) => `<div class="pk-cat-head" data-toggle="${esc(key)}">
         <span class="pk-caret">${icon(isOpen ? 'caret-down' : 'caret-right')}</span><span class="pk-cat-name">${esc(label)}</span><span class="muted small">${count}</span>
@@ -1364,12 +1398,13 @@ class Editor {
         if (packOpen) {
           for (const c of p.categories) {
             const key = `${p.name}${SEP}${c.name}`;
-            const list = A.categoryAssets(p.name, c.name);
-            this.pickLists.set(key, list);
+            const sets = A.categorySets(p.name, c.name);
+            this.pickLists.set(key, A.categoryAssets(p.name, c.name));
             const isOpen = open.has(key);
-            // Closed, a category shows a strip of its first pictures.
-            body += `<section class="pk-section">${catHead(key, c.name || 'General', list.length, isOpen)}
-              ${isOpen ? grid(list, key) : `<div class="pk-strip">${list.slice(0, 6).map((a) => tile(a, ' mini')).join('')}${list.length > 6 ? `<button class="pk-more" data-toggle="${esc(key)}">+${list.length - 6}</button>` : ''}</div>`}</section>`;
+            // Closed, a category shows a strip of its first stamps.
+            body += `<section class="pk-section">${catHead(key, c.name || 'General', sets.length, isOpen)}
+              ${isOpen ? setGrid(sets, key) : `<div class="pk-strip">${sets.slice(0, 6).map((st) => `<span class="pk-set">${tile(st.items[0], ' mini', st)}${st.items.length > 1 ? `<span class="pk-badge static">${st.items.length}</span>` : ''}</span>`).join('')}${sets.length > 6 ? `<button class="pk-more" data-toggle="${esc(key)}">+${sets.length - 6}</button>` : ''}</div>`}</section>`;
+            for (const st of sets.slice(0, 6)) this.pickSets.set(st.key, st.items.map((a) => a.id));
           }
         }
         body += '</section>';
@@ -1400,7 +1435,7 @@ class Editor {
     if (!el || el.hidden) return;
     const mode = this.pickerMode;
     const chosen = new Set(mode === 'texture' ? [docStyle(this.doc).landTexture] : mode === 'terrain' ? [this.terrainTex] : mode === 'overlay' ? [docStyle(this.doc).overlay] : mode === 'shapeFill' ? [this.shapeStyle.fillTex] : this.brush);
-    for (const t of $$('.tile', el)) t.classList.toggle('on', chosen.has(t.dataset.id));
+    for (const t of $$('.tile', el)) t.classList.toggle('on', chosen.has(t.dataset.id) || (!!t.dataset.set && !!this.pickSets?.get(t.dataset.set)?.some((id) => chosen.has(id))));
     const count = $('.pk-count', el);
     if (count) count.textContent = this.brush.length ? `${this.brush.length} chosen${this.brush.length > 1 ? ', placed at random' : ''}` : 'Click a picture to use it';
     $('[data-plain]', el)?.classList.toggle('on', mode === 'terrain' && !this.terrainTex);
@@ -1440,14 +1475,24 @@ class Editor {
       if (all) { e.stopPropagation(); this.setBrush((this.pickLists.get(all.dataset.all) || []).map((a) => a.id)); return; }
       const showAll = e.target.closest('[data-showall]');
       if (showAll) { this.pickAll.add(showAll.dataset.showall); this.renderPicker(); return; }
+      const expand = e.target.closest('[data-expand]');
+      if (expand) {
+        const k = expand.dataset.expand;
+        if (this.pickSetOpen.has(k)) this.pickSetOpen.delete(k); else this.pickSetOpen.add(k);
+        this.renderPicker();
+        return;
+      }
       const t = e.target.closest('.tile');
       if (t) {
         const id = t.dataset.id;
         if (tex) { pick(id); useRecent('texture', [id]); this.markPicker(); return; }
+        // A stamp's tile picks the stamp: all its variations when placing
+        // them at random, else its first. A variation's tile picks just it.
+        const ids = t.dataset.set && this.stampRandom ? this.pickSets.get(t.dataset.set) || [id] : [id];
         // Ctrl / Cmd click (or "Pick several") adds or removes; a plain click picks just this one.
         const add = this.multi || e.ctrlKey || e.metaKey;
-        if (add) this.setBrush(this.brush.includes(id) ? this.brush.filter((x) => x !== id) : [...this.brush, id]);
-        else this.setBrush([id]);
+        if (add) this.setBrush(ids.every((x) => this.brush.includes(x)) ? this.brush.filter((x) => !ids.includes(x)) : [...new Set([...this.brush, ...ids])]);
+        else this.setBrush(ids);
         if (this.tool !== 'stamp' && this.tool !== 'scatter') this.setTool('stamp');
         // On small screens the picker covers the map: close it after a single pick.
         if (!add && matchMedia('(max-width: 600px)').matches) el.hidden = true;
@@ -1471,6 +1516,14 @@ class Editor {
       }
     }, { root: el, rootMargin: '300px' });
     for (const t of $$('.tile:not(:has(img))', el)) io.observe(t);
+  }
+
+  fillThumbs() {
+    const el = $('.picker', this.root);
+    if (!el || el.hidden) return;
+    for (const t of $$('.tile:not(:has(img))', el)) {
+      A.thumbURL(t.dataset.id).then((url) => { if (url && !t.querySelector('img')) t.innerHTML = `<img src="${url}" alt="" draggable="false">`; });
+    }
   }
 
   setBrush(ids) {
@@ -1597,6 +1650,7 @@ class Editor {
       else if (act === 'zoom-100') this.zoomAt(this.vw / 2, this.vh / 2, 1 / this.s);
       else if (act === 'stamp-turn') this.turnStamp(e.shiftKey ? 45 : 15);
       else if (act === 'stamp-flip') this.flipStamp();
+      else if (act === 'stamp-random') this.setStampRandom(!this.stampRandom);
       else if (act === 'picker') this.togglePicker('stamp');
       else if (act === 'textures') this.togglePicker('texture');
       else if (act === 'flip') this.flipSelected();
@@ -2079,15 +2133,13 @@ class Editor {
     return true;
   }
 
-  // Alt ← →: the stamp's set is the pictures in its category that share its
-  // name but for a number at the end ("Tower 1", "Tower 2"…), or the whole
-  // category when it has no numbered names.
+  // Alt ← →: the next or previous variation of the stamp (the pictures in
+  // its folder, or numbered alike), or of its category when it has none.
   stepSet(dir) {
     const a = this.brush.map((id) => A.asset(id)).find(Boolean);
     if (!a) { this.openPicker(); return; }
-    const cat = A.categoryAssets(a.pack, a.category);
-    const set = cat.filter((x) => A.setName(x.name) === A.setName(a.name));
-    const list = set.length > 1 ? set : cat;
+    const set = A.variationsOf(a);
+    const list = set.length > 1 ? set : A.categoryAssets(a.pack, A.groupOf(a));
     const i = list.findIndex((x) => x.id === a.id);
     const next = list[(i + dir + list.length) % list.length];
     this.setBrush([next.id]);

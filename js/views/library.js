@@ -41,7 +41,7 @@ export async function viewLibrary(view) {
         <label class="check" title="Download every image in this pack, for working offline"><input type="checkbox" data-pin="${esc(p.name)}" ${meta.pinned.includes(p.name) ? 'checked' : ''}> Keep offline</label>
       </div>`).join('')}</div>`
     : `<div class="empty-state">${icon('stack', 'empty-emblem')}<h2>No art yet</h2>
-        <p>Import a pack file, or a folder or zip of images. Its top folder becomes the pack, and the folders inside it become categories (mountains, trees, textures…).</p>
+        <p>Import a pack file, or a folder or zip of images. Its top folder becomes the pack, the folders inside it categories (mountains, trees, textures…), and a folder inside a category one stamp, with its pictures as that stamp’s variations.</p>
         <p class="muted small">Art is stored on this device and synced to your other devices through OneDrive. It’s never part of the app itself.</p></div>`}
     <p class="muted small center" id="storageNote"></p>`;
 
@@ -95,7 +95,7 @@ async function startImport(raw, fallbackName = '', manifest = null) {
   const folders = new Set(entries.map((e) => e.category ?? e.path.split('/').slice(0, -1).join('/')));
   const existing = A.packs().map((p) => p.name);
   const pack = await modal('Import art', `<form class="form">
-      <p>${num(entries.length)} images in ${folders.size} ${folders.size === 1 ? (manifest ? 'category' : 'folder') : (manifest ? 'categories' : 'folders')}.${manifest ? '' : ' Each folder becomes a category.'}</p>
+      <p>${num(entries.length)} images in ${folders.size} ${folders.size === 1 ? (manifest ? 'category' : 'folder') : (manifest ? 'categories' : 'folders')}.${manifest ? '' : ' Each folder becomes a category; a folder inside one becomes a stamp, its pictures the stamp’s variations.'}</p>
       <label>Pack<input name="pack" required maxlength="80" list="packNames" value="${esc(root || fallbackName || 'Imported art')}"></label>
       <datalist id="packNames">${existing.map((n) => `<option value="${esc(n)}">`).join('')}</datalist>
       <p class="muted small">Importing into an existing pack adds to it. Images already in your library are skipped.</p>
@@ -158,7 +158,7 @@ export async function viewPack(view, name) {
   if (!p) { location.hash = '#/library'; return; }
   setTitle(name);
   const byCat = new Map(p.categories.map((c) => [c.name, []]));
-  for (const a of A.liveAssets()) if (a.pack === name) byCat.get(a.category).push(a);
+  for (const a of A.liveAssets()) if (a.pack === name) byCat.get(A.groupOf(a)).push(a);
   const open = p.count <= 400;
   view.innerHTML = `
     <div class="page-head"><div><div class="eyebrow"><a href="#/library">Art library</a></div><h1>${esc(name)}</h1>
@@ -190,8 +190,9 @@ export async function viewPack(view, name) {
   const fill = (d) => {
     const grid = $('.asset-grid', d);
     if (grid.childElementCount) return;
-    grid.innerHTML = byCat.get(d.dataset.cat).sort(A.byName)
-      .map((a) => `<div class="tile" data-id="${a.id}" title="${esc(a.name)} · ${a.w}×${a.h}">${icon('image')}</div>`).join('');
+    // Stamp by stamp, each one's variations together.
+    grid.innerHTML = A.categorySets(name, d.dataset.cat)
+      .map((st) => st.items.map((a) => `<div class="tile" data-id="${a.id}" title="${esc(st.items.length > 1 ? `${st.name}: ${a.name}` : a.name)} · ${a.w}×${a.h}">${icon('image')}</div>`).join('')).join('');
     for (const t of grid.children) io.observe(t);
   };
   for (const d of $$('details.cat', view)) {

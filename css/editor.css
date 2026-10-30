@@ -260,3 +260,18 @@ kbd { font: 500 .82rem var(--mono); background: var(--ink-3); border: 1px solid 
 .shape-kind button, .shape-mode button, .shape-dash button { padding: .4em .6em; }
 .shape-dash button { letter-spacing: .05em; }
 .shape-kind button .i { width: 18px; height: 18px; }
+
+/* A stamp with variations: one tile, a count badge that shows them beside it */
+.pk-set { position: relative; display: block; min-width: 0; }
+.pk-set > .tile { width: 100%; }
+.pk-strip .pk-set { display: inline-block; flex-shrink: 0; }
+.pk-strip .pk-set > .tile { width: 36px; }
+.pk-badge {
+  position: absolute; right: 3px; bottom: 3px; min-width: 1.35rem; height: 1.2rem; padding: 0 .3rem;
+  border: 1px solid var(--rule-strong); border-radius: 4px; background: color-mix(in srgb, var(--ink-1, #161411) 88%, transparent);
+  color: var(--text-2); font: 600 .7rem/1 var(--sans); display: inline-flex; align-items: center; justify-content: center; cursor: pointer;
+}
+.pk-badge:hover { color: var(--brass); border-color: var(--brass); }
+.pk-badge.static { pointer-events: none; right: 1px; bottom: 1px; min-width: 0; height: .95rem; font-size: .6rem; padding: 0 .2rem; }
+.pk-set.open > .tile { box-shadow: 0 0 0 1px var(--brass); }
+.pk-grid .tile.variant { border-style: dashed; background-color: color-mix(in srgb, var(--brass) 6%, transparent); }
