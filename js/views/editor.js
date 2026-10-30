@@ -9,7 +9,7 @@ import * as images from '../images.js';
 import { $, $$, esc, uid, toast, modal } from '../util.js';
 import { icon } from '../icons.js';
 import { setTitle, state } from '../ui.js';
-import { drawDoc, drawStroke, strokePath, docStyle, STYLE, editorLandScale, labelBox, drawLabel, FONTS, fontCSS, mapStyle, texturePattern, drawPath, PATHS, docLayers, layerResolver, kindLayer, LAND_LAYER, BUILTIN_LAYERS, samplePath, pointsBox, simplify, landNeedsRefresh, refreshLand, releaseLand } from '../render.js';
+import { drawDoc, drawStroke, strokePath, docStyle, STYLE, editorLandScale, labelBox, drawLabel, FONTS, fontCSS, mapStyle, texturePattern, drawPath, PATHS, docLayers, layerResolver, kindLayer, LAND_LAYER, BUILTIN_LAYERS, samplePath, pointsBox, simplify, landNeedsRefresh, refreshLand, releaseLand, SHAPE_DEFAULTS, shapePath, shapeHit, drawShapeGroup } from '../render.js';
 import { exportDialog } from '../export.js';
 
 const INKS = ['#2b2118', '#6b4a2b', '#2f5d7c', '#3f6b3a', '#8e2f22'];
@@ -23,20 +23,29 @@ const TOOLS = [
   ['terrain', 'paint-brush', 'Brush: paint textures onto the land (B)', 'Brush'],
   ['stamp', 'stamp', 'Stamp: place art from the library (O)', 'Stamp'],
   ['scatter', 'stamp', 'Stamp: place many at once (O)', 'Stamp'],
+  ['shape', 'shapes', 'Shapes: rectangles, ellipses and polygons (R)', 'Shape'],
   ['path', 'path', 'Lines: roads, trails, rivers and borders (L)', 'Line'],
   ['pen', 'pencil-line', 'Pen and colour brush (P)', 'Pen'],
   ['text', 'text-t', 'Text: click to add a label, or click one to edit it (T)', 'Text'],
   ['eraser', 'eraser', 'Eraser (U)', 'Eraser'],
 ];
 // The layer each tool draws on.
-const TOOL_LAYER = { land: 'land', terrain: 'land', path: 'stroke', pen: 'stroke', stamp: 'stamp', scatter: 'stamp', text: 'label' };
+const TOOL_LAYER = { land: 'land', terrain: 'land', path: 'stroke', pen: 'stroke', shape: 'stroke', stamp: 'stamp', scatter: 'stamp', text: 'label' };
 // Tool keys, as in Inkarnate where it has the tool (O picks the stamp tool
 // in whichever placing mode it was last in).
-const KEYS = { h: 'pan', v: 'select', m: 'land', b: 'terrain', o: 'stamp', l: 'path', p: 'pen', t: 'text', u: 'eraser' };
+const KEYS = { h: 'pan', v: 'select', m: 'land', b: 'terrain', o: 'stamp', r: 'shape', l: 'path', p: 'pen', t: 'text', u: 'eraser' };
+const glyph = (d) => `<svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
+const SHAPE_KINDS = [
+  ['rect', 'Rectangle (Shift: square)', glyph('<rect x="4" y="6" width="16" height="12" rx="1"/>')],
+  ['ellipse', 'Ellipse (Shift: circle)', glyph('<ellipse cx="12" cy="12" rx="8.5" ry="6.5"/>')],
+  ['poly', 'Polygon: click each corner, then the first again', glyph('<path d="M12 4l8 6-3 9H7l-3-9z"/>')],
+  ['free', 'Freehand', glyph('<path d="M6 16c-2-4 1-9 6-10s8 3 6 7-6 2-7 5 3 3 5 2"/>')],
+];
+const DASHES = [['solid', '──', 'Solid outline'], ['dotted', '···', 'Dotted outline'], ['dashed', '- -', 'Dashed outline']];
 const HANDLE = 9; // screen pixels
 const ROT_OFFSET = 34;
 // Gestures whose steps change the drawing or the view (the rest only draw over it).
-const MAP_GESTURES = new Set(['pan', 'pinch', 'place', 'move', 'scale', 'rotate', 'node']); // (the eraser and scatter redraw the map themselves, when they actually change something)
+const MAP_GESTURES = new Set(['pan', 'pinch', 'place', 'move', 'scale', 'rotate', 'node', 'shape']); // (the eraser and scatter redraw the map themselves, when they actually change something)
 
 const load = (k, d) => { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch { return d; } };
 const keep = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* private mode */ } };
@@ -113,6 +122,21 @@ export async function viewEditor(view, id) {
           <button class="tool flip stamp-only" data-act="stamp-turn" title="Turn the next stamp 15° (> and <)" aria-label="Turn the next stamp">${icon('arrow-counter-clockwise')}<b class="badge" data-val="stampRot"></b></button>
           <button class="tool stamp-only" data-act="stamp-flip" title="Flip the next stamp (Shift F)" aria-label="Flip the next stamp" aria-pressed="false">${icon('flip-horizontal')}</button>
           <button class="tool scatter-only" data-act="scatter-settings" title="Scatter settings: area (Q and A), density (Alt Q and Alt A), size and rotation" aria-label="Scatter settings">${icon('gear-six')}</button>
+        </span>
+        <span class="tb-group" data-for="shape">
+          <span class="seg shape-kind">${SHAPE_KINDS.map(([k, n, g]) => `<button type="button" data-shapekind="${k}" title="${n}" aria-label="${n.replace(/ \(.*|:.*/, '')}">${g}</button>`).join('')}</span>
+          <span class="seg shape-mode" title="Add a shape, or cut one out of the merged shapes it overlaps (X)"><button type="button" data-shapemode="add">Add</button><button type="button" data-shapemode="subtract">Cut</button></span>
+          <label class="tb-check" title="Shapes with the same look join into one, outlined round the outside"><input type="checkbox" class="shape-merge"> Merge</label>
+          <span class="tb-sep"></span>
+          <label class="tb-check" title="Fill"><input type="checkbox" class="shape-fill"> Fill</label>
+          <input type="color" class="shape-fill-color" title="Fill colour" aria-label="Fill colour">
+          <button class="brush-chip shape-chip" data-act="shape-tex" title="Fill texture (F)" aria-label="Fill texture"></button>
+          <span class="tb-sep"></span>
+          <label class="tb-check" title="Outline"><input type="checkbox" class="shape-stroke"> Outline</label>
+          <input type="color" class="shape-stroke-color" title="Outline colour" aria-label="Outline colour">
+          ${opt('Width', 'shapeWidth', '<input type="range" class="shape-width" min="1" max="60" step="1" title="Outline width (W and S)" aria-label="Outline width">')}
+          <span class="seg shape-dash">${DASHES.map(([k, g, n]) => `<button type="button" data-dash="${k}" title="${n}">${g}</button>`).join('')}</span>
+          ${opt('Opacity', 'shapeOpacity', '<input type="range" class="shape-opacity" min="10" max="100" step="5" title="Opacity (E and D)" aria-label="Shape opacity">')}
         </span>
         <span class="tb-group" data-for="select">
           <span class="tb-note"></span>
@@ -212,6 +236,11 @@ class Editor {
     this.penSoft = load('ac.penSoft', 0);
     this.stampSize = load('ac.stampSize', 256);
     this.stampOpacity = load('ac.stampOpacity', 1); // of new stamps
+    this.shapeKind = load('ac.shapeKind', 'rect');
+    this.shapeMode = 'add';
+    this.shapeMerge = load('ac.shapeMerge', true);
+    this.shapeStyle = { ...SHAPE_DEFAULTS, ...load('ac.shapeStyle', {}) }; // how new shapes look
+    this.poly = null; // a polygon being clicked out: its points so far
     this.snap = load('ac.snap', false); // stamps snap to the map's grid
     // Scatter brush: gap between stamps and how far they stray (both as a
     // share of the stamp size), size variation (±), random turn (share of
@@ -437,6 +466,8 @@ class Editor {
       strokePath(ctx, g.points, 2 / this.s);
       ctx.setLineDash([]);
     }
+    if (this.tool === 'shape' || this.tool === 'select') this.paintCutouts();
+    if (this.poly && this.tool === 'shape') this.paintPoly();
     // Land being painted shows as plain land or sea; the coast appears when it's done.
     if (g?.kind === 'land') { const st = mapStyle(this.doc); ctx.fillStyle = ctx.strokeStyle = g.stroke.mode === 'erase' ? st.sea : st.land; strokePath(ctx, g.stroke.points, g.stroke.width); }
     if (g?.kind === 'terrain') {
@@ -631,8 +662,8 @@ class Editor {
 
   // Stamps and labels can be selected and transformed; this is their box.
   box(o) {
-    if (o.kind === 'path') {
-      const b = pointsBox(o.points), r = o.width / 2;
+    if (ptsKey(o) === 'points') {
+      const b = pointsBox(o.points), r = o.kind === 'path' ? o.width / 2 : 0;
       return { cx: (b[0] + b[2]) / 2, cy: (b[1] + b[3]) / 2, w: b[2] - b[0] + 2 * r, h: b[3] - b[1] + 2 * r, rot: 0 };
     }
     return o.kind === 'label' ? labelBox(o) : { cx: o.x, cy: o.y, w: o.w, h: o.h, rot: o.rot || 0 };
@@ -680,6 +711,7 @@ class Editor {
   hitTest(o, mx, my) {
     const slack = 6 / this.s;
     if (o.kind === 'path') return nearLine(o.points, mx, my, o.width / 2 + slack);
+    if (o.kind === 'shape') return shapeHit(o, mx, my, slack);
     if (o.kind === 'label' && o.along) {
       const line = samplePath(o.along, 8 / this.s).flat();
       return nearLine(line, mx, my, o.size * 0.6 + slack);
@@ -774,7 +806,7 @@ class Editor {
 
   removeNode(o, i) {
     const key = ptsKey(o), p = o[key].slice();
-    if (p.length <= 4) { toast('A line needs at least two points'); return; }
+    if (o.kind === 'shape' ? p.length <= 6 : p.length <= 4) { toast(o.kind === 'shape' ? 'A shape needs at least three points' : 'A line needs at least two points'); return; }
     p.splice(2 * i, 2);
     this.commit({ undo: [clean(o)], redo: [{ ...clean(o), [key]: p, ...(key === 'along' ? { x: p[0], y: p[1] } : {}) }] });
   }
@@ -804,7 +836,7 @@ class Editor {
   // Paste in the middle of the view (from this map or another).
   paste() {
     if (!clipboard?.length) return;
-    const xs = clipboard.map((o) => o.x), ys = clipboard.map((o) => o.y);
+    const bs = clipboard.map((o) => this.box(o)), xs = bs.map((b) => b.cx), ys = bs.map((b) => b.cy);
     const [cx, cy] = this.toMap(this.vw / 2, this.vh / 2);
     this.addCopies(clipboard, cx - (Math.min(...xs) + Math.max(...xs)) / 2, cy - (Math.min(...ys) + Math.max(...ys)) / 2);
   }
@@ -815,6 +847,7 @@ class Editor {
     for (const o of this.live()) {
       if (!ok(o)) continue;
       if (o.kind === 'stamp' || o.kind === 'label') { if (this.inBox(o, mx, my, radius)) out.push(o); continue; }
+      if (o.kind === 'shape') { if (shapeHit(o, mx, my, radius)) out.push(o); continue; }
       if (o.kind !== 'stroke' && o.kind !== 'path') continue;
       const p = o.points, r = radius + o.width / 2;
       if (p.length === 2) { if (Math.hypot(p[0] - mx, p[1] - my) <= r) out.push(o); continue; }
@@ -830,6 +863,7 @@ class Editor {
   setTool(t) {
     if (t !== this.tool) this.prevTool = this.tool;
     this.tool = t;
+    this.poly = null;
     keep('ac.tool', t);
     if (t !== 'select') this.clearSel();
     if ((t === 'stamp' || t === 'scatter') && !this.brush.length) this.openPicker();
@@ -858,6 +892,17 @@ class Editor {
     $('.terrain-soft', this.root).value = Math.round(this.terrainSoft * 100);
     $('.terrain-opacity', this.root).value = Math.round(this.terrainOpacity * 100);
     for (const b of $$('[data-landmode]', this.root)) b.classList.toggle('on', b.dataset.landmode === this.landMode);
+    const sh = this.shapeStyle;
+    for (const b of $$('[data-shapekind]', this.root)) b.classList.toggle('on', b.dataset.shapekind === this.shapeKind);
+    for (const b of $$('[data-shapemode]', this.root)) b.classList.toggle('on', b.dataset.shapemode === this.shapeMode);
+    for (const b of $$('[data-dash]', this.root)) b.classList.toggle('on', b.dataset.dash === sh.dash);
+    $('.shape-merge', this.root).checked = this.shapeMerge;
+    $('.shape-fill', this.root).checked = sh.fill;
+    $('.shape-fill-color', this.root).value = sh.fillColor;
+    $('.shape-stroke', this.root).checked = sh.stroke;
+    $('.shape-stroke-color', this.root).value = sh.strokeColor;
+    $('.shape-width', this.root).value = sh.strokeWidth;
+    $('.shape-opacity', this.root).value = Math.round(sh.opacity * 100);
     const all = this.selectedObjs(), sel = all.length === 1 ? all[0] : null;
     // With nothing selected there's nothing to press: a hint takes the buttons' place.
     for (const b of $$('[data-for="select"] button', this.root)) b.hidden = !all.length;
@@ -872,7 +917,7 @@ class Editor {
     $('[data-act="stamp-flip"]', this.root).setAttribute('aria-pressed', this.stampFlip);
     this.showValues();
     this.syncHistory();
-    const adjustable = all.some((o) => o.kind === 'stamp' || o.kind === 'path');
+    const adjustable = all.some((o) => o.kind === 'stamp' || o.kind === 'path' || o.kind === 'shape');
     $('[data-act="adjust"]', this.root).hidden = !adjustable;
     if (!adjustable) $('.adjust-panel', this.root).hidden = true;
     else this.renderAdjust();
@@ -885,7 +930,7 @@ class Editor {
     const pct = (v) => `${Math.round(v * 100)}%`;
     const v = {
       landSize: this.landSize, terrainSize: this.terrainSize, terrainSoft: pct(this.terrainSoft), terrainOpacity: pct(this.terrainOpacity),
-      pathWidth: this.pathWidth, width: this.width, penOpacity: pct(this.penOpacity), penSoft: pct(this.penSoft), stampSize: this.stampSize, stampOpacity: pct(this.stampOpacity),
+      pathWidth: this.pathWidth, width: this.width, penOpacity: pct(this.penOpacity), penSoft: pct(this.penSoft), stampSize: this.stampSize, stampOpacity: pct(this.stampOpacity), shapeWidth: this.shapeStyle.strokeWidth, shapeOpacity: pct(this.shapeStyle.opacity),
       stampRot: this.stampRot ? `${this.stampRot}°` : '',
     };
     for (const b of $$('[data-val]', this.root)) b.textContent = v[b.dataset.val];
@@ -922,6 +967,8 @@ class Editor {
     $('.texture-chip', this.root).innerHTML = turl ? `<img src="${turl}" alt="">` : '<span class="chip-plain"></span>';
     const gurl = this.terrainTex && A.asset(this.terrainTex) && await A.thumbURL(this.terrainTex);
     $('.terrain-chip', this.root).innerHTML = gurl ? `<img src="${gurl}" alt="">` : '<span class="chip-plain" title="Base land"></span>';
+    const fx = this.shapeStyle.fillTex, furl = fx && A.asset(fx) && await A.thumbURL(fx);
+    $('.shape-chip', this.root).innerHTML = furl ? `<img src="${furl}" alt="">` : `<span class="chip-plain" style="background:${this.shapeStyle.fillColor}" title="Plain colour"></span>`;
   }
 
   openPicker(mode = 'stamp') {
@@ -949,6 +996,15 @@ class Editor {
     keep('ac.terrainTex', id);
     if (this.tool !== 'terrain') this.setTool('terrain');
     this.renderChip();
+  }
+
+  // How new shapes look; with shapes selected, they change too.
+  setShapeStyle(patch) {
+    this.shapeStyle = { ...this.shapeStyle, ...patch };
+    keep('ac.shapeStyle', this.shapeStyle);
+    if (this.selectedObjs().some((o) => o.kind === 'shape')) this.editSelected((o) => (o.kind === 'shape' ? patch : {}));
+    this.syncToolbar();
+    this.redrawOverlay();
   }
 
   togglePicker(mode) {
@@ -1080,12 +1136,12 @@ class Editor {
     const el = $('.adjust-panel', this.root);
     if (!el || el.hidden) return;
     const all = this.selectedObjs();
-    const stamps = all.filter((o) => o.kind === 'stamp'), paths = all.filter((o) => o.kind === 'path');
-    if (!stamps.length && !paths.length) return;
+    const stamps = all.filter((o) => o.kind === 'stamp'), paths = all.filter((o) => o.kind === 'path'), shapes = all.filter((o) => o.kind === 'shape');
+    if (!stamps.length && !paths.length && !shapes.length) return;
     // Don't redraw under a slider that's being dragged.
     if (el.contains(document.activeElement) && document.activeElement.type === 'range') return;
-    const o = stamps[0], q = paths[0];
-    const title = all.length > 1 ? `${all.length} selected` : o ? 'Stamp' : 'Path';
+    const o = stamps[0], q = paths[0], sh = shapes[0];
+    const title = all.length > 1 ? `${all.length} selected` : o ? 'Stamp' : q ? 'Path' : 'Shape';
     el.innerHTML = `<header><b>${title}</b><button class="icon-btn" data-close aria-label="Close">${icon('x')}</button></header>
       <div class="style-body">
         ${o ? `${paths.length ? '<div class="field-label">Stamps</div>' : ''}
@@ -1098,6 +1154,17 @@ class Editor {
         <label class="inline">Style <select name="pathStyle">${Object.entries(PATHS).map(([k, [name]]) => `<option value="${k}" ${q.style === k ? 'selected' : ''}>${name}</option>`).join('')}</select></label>
         <label>Width<input type="range" name="pathWidth" min="2" max="160" step="1" value="${q.width}"></label>
         <p class="muted small">Drag a point to move it, drag a + to add one, Alt-click or double-click a point to remove it.</p>` : ''}
+        ${sh ? `${stamps.length || paths.length ? '<div class="field-label">Shapes</div>' : ''}
+        <label class="inline">Kind <select name="shapeMode"><option value="add" ${sh.mode !== 'subtract' ? 'selected' : ''}>Shape</option><option value="subtract" ${sh.mode === 'subtract' ? 'selected' : ''}>Cut-out</option></select></label>
+        <label class="check"><input type="checkbox" name="merge" ${sh.merge !== false ? 'checked' : ''}> Merge with matching shapes</label>
+        <label class="check"><input type="checkbox" name="fill" ${sh.fill ? 'checked' : ''}> Fill</label>
+        <label class="inline">Fill colour <input type="color" name="fillColor" value="${sh.fillColor || '#d9c9a3'}"></label>
+        <label class="check"><input type="checkbox" name="stroke" ${sh.stroke ? 'checked' : ''}> Outline</label>
+        <label class="inline">Outline colour <input type="color" name="strokeColor" value="${sh.strokeColor || '#2b2118'}"></label>
+        <label>Outline width<input type="range" name="strokeWidth" min="1" max="60" step="1" value="${sh.strokeWidth || 6}"></label>
+        <label class="inline">Outline <select name="dash">${DASHES.map(([k, , n]) => `<option value="${k}" ${sh.dash === k ? 'selected' : ''}>${n.replace(' outline', '')}</option>`).join('')}</select></label>
+        <label>Opacity<input type="range" name="shapeOpacity" min="0.1" max="1" step="0.05" value="${sh.opacity ?? 1}"></label>
+        ${ptsKey(sh) ? '<p class="muted small">Drag a corner to move it, drag a + to add one, Alt-click a corner to remove it.</p>' : ''}` : ''}
       </div>`;
     $('[data-close]', el).onclick = () => { el.hidden = true; };
     const toStamps = (patch) => this.editSelected((x) => (x.kind === 'stamp' ? patch : {}));
@@ -1108,6 +1175,13 @@ class Editor {
       const v = t.type === 'range' ? +t.value : t.value;
       if (t.name === 'pathStyle') return toPaths({ style: v });
       if (t.name === 'pathWidth') return toPaths({ width: v });
+      const toShapes = (patch) => this.editSelected((x) => (x.kind === 'shape' ? patch : {}));
+      if (t.name === 'shapeMode') return toShapes({ mode: v === 'subtract' ? 'subtract' : null });
+      if (t.name === 'shapeOpacity') return toShapes({ opacity: v });
+      if (t.name === 'merge') return toShapes({ merge: t.checked ? null : false });
+      if (['fill', 'stroke'].includes(t.name)) return toShapes({ [t.name]: t.checked });
+      if (t.name === 'fillColor') return toShapes({ fillColor: v, fillTex: null, fill: true });
+      if (['strokeColor', 'strokeWidth', 'dash'].includes(t.name)) return toShapes({ [t.name]: v, stroke: true });
       // Choosing a tint colour with no strength yet gives it some, so it shows.
       toStamps(t.name === 'tint' && !(o.tintAmt > 0) ? { tint: v, tintAmt: 0.5 } : { [t.name]: v });
     };
@@ -1225,8 +1299,8 @@ class Editor {
     const mode = this.pickerMode;
     const tex = mode !== 'stamp';
     const kind = tex ? 'texture' : 'stamp';
-    const title = { stamp: 'Stamps', texture: 'Land texture', terrain: 'Terrain', overlay: 'Paper' }[mode];
-    const plainLabel = { terrain: 'Base land', overlay: 'No paper' }[mode] || 'Plain land';
+    const title = { stamp: 'Stamps', texture: 'Land texture', terrain: 'Terrain', overlay: 'Paper', shapeFill: 'Shape fill' }[mode];
+    const plainLabel = { terrain: 'Base land', overlay: 'No paper', shapeFill: 'Plain colour' }[mode] || 'Plain land';
     const packs = A.packs().map((p) => ({ ...p, categories: p.categories.filter((c) => c.kind === kind) })).filter((p) => p.categories.length);
     const closeBtn = `<button class="icon-btn" data-close aria-label="Close">${icon('x')}</button>`;
     if (!packs.length) {
@@ -1325,7 +1399,7 @@ class Editor {
     const el = $('.picker', this.root);
     if (!el || el.hidden) return;
     const mode = this.pickerMode;
-    const chosen = new Set(mode === 'texture' ? [docStyle(this.doc).landTexture] : mode === 'terrain' ? [this.terrainTex] : mode === 'overlay' ? [docStyle(this.doc).overlay] : this.brush);
+    const chosen = new Set(mode === 'texture' ? [docStyle(this.doc).landTexture] : mode === 'terrain' ? [this.terrainTex] : mode === 'overlay' ? [docStyle(this.doc).overlay] : mode === 'shapeFill' ? [this.shapeStyle.fillTex] : this.brush);
     for (const t of $$('.tile', el)) t.classList.toggle('on', chosen.has(t.dataset.id));
     const count = $('.pk-count', el);
     if (count) count.textContent = this.brush.length ? `${this.brush.length} chosen${this.brush.length > 1 ? ', placed at random' : ''}` : 'Click a picture to use it';
@@ -1336,6 +1410,7 @@ class Editor {
     const tex = mode !== 'stamp', kind = tex ? 'texture' : 'stamp';
     const pick = (id) => {
       if (mode === 'terrain') this.setTerrainTex(id);
+      else if (mode === 'shapeFill') { this.setShapeStyle({ fillTex: id, fill: true }); this.renderChip(); }
       else if (mode === 'overlay') this.setStyle({ overlay: id });
       else this.setLandTexture(id);
     };
@@ -1510,6 +1585,9 @@ class Editor {
       if (b.dataset.pathstyle) { this.pathStyle = b.dataset.pathstyle; keep('ac.pathStyle', this.pathStyle); this.syncToolbar(); }
       if (b.dataset.landmode) { this.landMode = b.dataset.landmode; keep('ac.landMode', this.landMode); this.syncToolbar(); }
       if (b.dataset.place) { keep('ac.stampPlace', b.dataset.place); this.setTool(b.dataset.place); }
+      if (b.dataset.shapekind) { this.shapeKind = b.dataset.shapekind; keep('ac.shapeKind', this.shapeKind); this.poly = null; this.syncToolbar(); this.redrawOverlay(); }
+      if (b.dataset.shapemode) { this.shapeMode = b.dataset.shapemode; this.syncToolbar(); }
+      if (b.dataset.dash) this.setShapeStyle({ dash: b.dataset.dash, stroke: true });
       const act = b.dataset.act;
       if (act === 'undo') this.undo();
       else if (act === 'redo') this.redo();
@@ -1532,6 +1610,7 @@ class Editor {
       else if (act === 'style') this.togglePanel('.style-panel', () => this.renderStylePanel());
       else if (act === 'adjust') this.togglePanel('.adjust-panel', () => this.renderAdjust());
       else if (act === 'terrain-picker') this.togglePicker('terrain');
+      else if (act === 'shape-tex') this.togglePicker('shapeFill');
       else if (act === 'scatter-settings') this.togglePanel('.scatter-panel', () => this.renderScatter());
     };
     $('.toolbar', this.root).onclick = onBar;
@@ -1546,6 +1625,13 @@ class Editor {
     $('.pen-soft', this.root).oninput = (e) => { this.penSoft = +e.target.value / 100; keep('ac.penSoft', this.penSoft); };
     $('.ink-custom', this.root).oninput = (e) => { this.ink = e.target.value; keep('ac.ink', this.ink); this.syncToolbar(); };
     $('.stamp-size', this.root).oninput = (e) => { this.flashSize(); this.stampSize = sizeFromSlider(+e.target.value); keep('ac.stampSize', this.stampSize); };
+    $('.shape-merge', this.root).onchange = (e) => { this.shapeMerge = e.target.checked; keep('ac.shapeMerge', this.shapeMerge); };
+    $('.shape-fill', this.root).onchange = (e) => this.setShapeStyle({ fill: e.target.checked });
+    $('.shape-fill-color', this.root).oninput = (e) => this.setShapeStyle({ fillColor: e.target.value, fill: true, fillTex: null });
+    $('.shape-stroke', this.root).onchange = (e) => this.setShapeStyle({ stroke: e.target.checked });
+    $('.shape-stroke-color', this.root).oninput = (e) => this.setShapeStyle({ strokeColor: e.target.value, stroke: true });
+    $('.shape-width', this.root).oninput = (e) => this.setShapeStyle({ strokeWidth: +e.target.value, stroke: true });
+    $('.shape-opacity', this.root).oninput = (e) => this.setShapeStyle({ opacity: +e.target.value / 100 });
     $('.stamp-opacity', this.root).oninput = (e) => { this.stampOpacity = +e.target.value / 100; keep('ac.stampOpacity', this.stampOpacity); this.redrawOverlay(); };
     $('.land-size', this.root).oninput = (e) => { this.flashSize(); this.landSize = sizeFromSlider(+e.target.value); keep('ac.landSize', this.landSize); };
     $('.path-width', this.root).oninput = (e) => { this.flashSize(); this.pathWidth = +e.target.value; keep('ac.pathWidth', this.pathWidth); };
@@ -1656,6 +1742,11 @@ class Editor {
     if (e.key === '/') { e.preventDefault(); this.togglePanel('.layers-panel', () => this.renderLayers()); return; }
     if (e.key === 'Tab') { e.preventDefault(); if (this.prevTool && TOOLS.some(([t]) => t === this.prevTool)) this.setTool(this.prevTool); return; }
     if (code === 'Backquote') { e.preventDefault(); this.restoreSelection(); return; }
+    if (this.poly) {
+      if (e.key === 'Enter') { e.preventDefault(); this.finishPoly(); return; }
+      if (e.key === 'Escape') { this.poly = null; this.redrawOverlay(); return; }
+      if (e.key === 'Backspace' || e.key === 'Delete') { e.preventDefault(); this.poly.splice(-2); if (!this.poly.length) this.poly = null; this.redrawOverlay(); return; }
+    }
     if (any && (e.key === 'Delete' || e.key === 'Backspace')) { e.preventDefault(); this.deleteSelected(); return; }
     if (sel?.kind === 'label' && e.key === 'Enter') { e.preventDefault(); this.editLabel(sel); return; }
     const arrow = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key];
@@ -1721,6 +1812,14 @@ class Editor {
       if (code === 'BracketLeft' || code === 'BracketRight') return this.labelSetting(target, 'font', code === 'BracketRight' ? 1 : -1);
       return false;
     }
+    if (tool === 'shape') {
+      const sh = this.shapeStyle;
+      if (letter === 'w' || letter === 's') { this.setShapeStyle({ strokeWidth: Math.max(1, Math.min(60, sh.strokeWidth + (letter === 'w' ? 1 : -1) * (big ? 5 : 1))), stroke: true }); toast(`Outline ${this.shapeStyle.strokeWidth}`, 900); return true; }
+      if (letter === 'e' || letter === 'd') { this.setShapeStyle({ opacity: Math.round(Math.max(0.1, Math.min(1, sh.opacity + (letter === 'e' ? 1 : -1) * (big ? 0.2 : 0.05))) * 100) / 100 }); toast(`Opacity ${Math.round(this.shapeStyle.opacity * 100)}%`, 900); return true; }
+      if (letter === 'x') { this.shapeMode = this.shapeMode === 'add' ? 'subtract' : 'add'; this.syncToolbar(); toast(this.shapeMode === 'add' ? 'Adding shapes' : 'Cutting shapes out', 1200); return true; }
+      if (letter === 'f') { this.togglePicker('shapeFill'); return true; }
+      return false;
+    }
     if (letter === 'w' || letter === 's') return this.resizeBrush(letter === 'w', big);
     if (tool === 'land' && letter === 'x') {
       this.landMode = this.landMode === 'add' ? 'erase' : 'add';
@@ -1751,6 +1850,88 @@ class Editor {
     if (letter === 'q' || letter === 'a') return this.brushSetting('soft', (letter === 'q' ? 1 : -1) * (big ? 0.2 : 0.05));
     if (turn && tool === 'stamp') { this.turnStamp(turn * (big ? 45 : 15)); return true; }
     return false;
+  }
+
+  // --- shapes -----------------------------------------------------------
+
+  // A new shape object from its outline, with the current look.
+  newShape(geom) {
+    const st = this.shapeStyle;
+    return {
+      id: uid(), kind: 'shape', ...this.layerField(), ...geom,
+      fill: st.fill, fillColor: st.fillColor, fillTex: st.fillTex, stroke: st.stroke, strokeColor: st.strokeColor,
+      strokeWidth: st.strokeWidth, dash: st.dash, opacity: st.opacity,
+      ...(this.shapeMode === 'subtract' ? { mode: 'subtract' } : {}), ...(this.shapeMerge ? {} : { merge: false }),
+      z: this.nextZ(),
+    };
+  }
+
+  // A drag's shape: a rectangle or ellipse from corner to corner (Shift:
+  // square or circle; Alt: from the middle), or the freehand outline. Null
+  // while it's too small to keep.
+  shapeFromGesture(g, final = false) {
+    const min = 4 / this.s;
+    if (this.shapeKind === 'free') {
+      const p = final ? simplify(g.points, Math.max(1, 1.5 / this.s)) : g.points;
+      if (p.length < 6) return null;
+      const b = pointsBox(p);
+      if (b[2] - b[0] < min && b[3] - b[1] < min) return null;
+      return { ...this.newShape({ shape: 'poly', points: p.slice() }), id: g.id };
+    }
+    let dx = g.to[0] - g.from[0], dy = g.to[1] - g.from[1];
+    if (g.square) { const d = Math.max(Math.abs(dx), Math.abs(dy)); dx = Math.sign(dx || 1) * d; dy = Math.sign(dy || 1) * d; }
+    const [w, h] = g.centred ? [Math.abs(dx) * 2, Math.abs(dy) * 2] : [Math.abs(dx), Math.abs(dy)];
+    if (w < min || h < min) return null;
+    const [x, y] = g.centred ? g.from : [g.from[0] + dx / 2, g.from[1] + dy / 2];
+    return { ...this.newShape({ shape: this.shapeKind, x: r1(x), y: r1(y), w: r1(w), h: r1(h), rot: 0 }), id: g.id };
+  }
+
+  // Polygons are clicked out point by point; clicking the first point again
+  // (or the last one twice, or Enter) finishes.
+  polyClick(x, y) {
+    const p = this.poly;
+    if (!p) { this.poly = [x, y]; this.redrawOverlay(); return; }
+    const near = (i) => Math.hypot(x - p[i], y - p[i + 1]) * this.s <= HANDLE + 4;
+    if (p.length >= 6 && (near(0) || near(p.length - 2))) { this.finishPoly(); return; }
+    p.push(x, y);
+    this.redrawOverlay();
+  }
+
+  finishPoly() {
+    const p = this.poly;
+    this.poly = null;
+    if (!p || p.length < 6) { this.redrawOverlay(); return; }
+    const o = this.newShape({ shape: 'poly', points: p });
+    this.commit({ undo: [{ id: o.id, deleted: true }], redo: [o] });
+  }
+
+  // Cut-outs draw nothing themselves, so they're outlined faintly while
+  // shapes are being drawn or selected, to be found again.
+  paintCutouts() {
+    const { octx: ctx } = this;
+    const cuts = this.live().filter((o) => o.kind === 'shape' && o.mode === 'subtract');
+    if (!cuts.length) return;
+    ctx.save();
+    ctx.strokeStyle = 'rgba(196, 85, 59, .7)';
+    ctx.lineWidth = 1 / this.s;
+    ctx.setLineDash([4 / this.s, 4 / this.s]);
+    for (const o of cuts) { ctx.beginPath(); shapePath(ctx, o); ctx.stroke(); }
+    ctx.restore();
+  }
+
+  paintPoly() {
+    const { octx: ctx } = this;
+    const p = [...this.poly, ...(this.hover ? [this.snapped(this.hover[0]), this.snapped(this.hover[1])] : [])];
+    if (p.length >= 6) drawShapeGroup(ctx, { adds: [{ ...this.newShape({ shape: 'poly', points: p }), opacity: 0.6 * this.shapeStyle.opacity }], subs: [] }, (id) => images.get(id), mapStyle(this.doc));
+    ctx.strokeStyle = '#c4553b';
+    ctx.lineWidth = 1.5 / this.s;
+    ctx.setLineDash([5 / this.s, 4 / this.s]);
+    ctx.beginPath();
+    for (let i = 0; i < p.length; i += 2) ctx[i ? 'lineTo' : 'moveTo'](p[i], p[i + 1]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = '#fff4ea';
+    for (let i = 0; i < this.poly.length; i += 2) { ctx.beginPath(); ctx.arc(this.poly[i], this.poly[i + 1], (i ? 3 : 5) / this.s, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); }
   }
 
   // --- selection helpers (keys) -------------------------------------------
@@ -1862,6 +2043,7 @@ class Editor {
       const t = store.transformObject(clean(o), k, cx * (1 - k), cy * (1 - k));
       // Lines keep their width; only their shape grows.
       if (o.kind === 'path') t.width = o.width;
+      if (o.kind === 'shape') t.strokeWidth = o.strokeWidth;
       return t;
     });
   }
@@ -1875,7 +2057,7 @@ class Editor {
     const turn = (x, y) => [r1(cx + (x - cx) * cos - (y - cy) * sin), r1(cy + (x - cx) * sin + (y - cy) * cos)];
     const turnPts = (p) => { const out = []; for (let i = 0; i < p.length; i += 2) out.push(...turn(p[i], p[i + 1])); return out; };
     this.editSelected((o) => {
-      if (o.kind === 'path') return { points: turnPts(o.points) };
+      if (ptsKey(o) === 'points') return { points: turnPts(o.points) };
       const [x, y] = objs.length > 1 ? turn(o.x, o.y) : [o.x, o.y];
       return { x, y, rot: Math.round(((o.rot || 0) + a) * 1000) / 1000, ...(o.along ? { along: turnPts(o.along) } : {}) };
     });
@@ -2001,6 +2183,10 @@ class Editor {
       this.eraseAt(pt);
     } else if (this.tool === 'select') {
       this.gesture = this.selectGesture(pt, mx, my, e) || { kind: 'pan', last: pt };
+    } else if (this.tool === 'shape') {
+      const [sx, sy] = [this.snapped(r1(mx)), this.snapped(r1(my))];
+      if (this.shapeKind === 'poly') { this.polyClick(sx, sy); this.gesture = { kind: 'noop' }; return; }
+      this.gesture = { kind: 'shape', id: uid(), from: [sx, sy], to: [sx, sy], points: [sx, sy] };
     } else if (this.tool === 'stamp') {
       const o = this.newStamp(this.snapped(mx), this.snapped(my), this.stampSize, { flip: this.stampFlip, rot: this.stampRot * Math.PI / 180 });
       if (!o) { this.openPicker(); toast('Choose some art first'); return; }
@@ -2120,6 +2306,15 @@ class Editor {
       if (e.shiftKey) rot = Math.round(rot / (Math.PI / 12)) * (Math.PI / 12); // 15° steps
       this.preview.set(g.id, { ...this.get(g.id), rot: Math.round(rot * 1000) / 1000 });
       g.moved = true;
+    } else if (g.kind === 'shape') {
+      const to = [this.snapped(r1(mx)), this.snapped(r1(my))];
+      if (this.shapeKind === 'free') {
+        const p = g.points;
+        if (Math.hypot(mx - p[p.length - 2], my - p[p.length - 1]) * this.s >= 3) p.push(r1(mx), r1(my));
+      }
+      g.to = to; g.square = e.shiftKey; g.centred = e.altKey;
+      const o = this.shapeFromGesture(g);
+      if (o) this.preview.set(g.id, o); else this.preview.delete(g.id);
     } else if (g.kind === 'scatter') {
       this.scatterAt(mx, my);
     } else if (g.kind === 'node') {
@@ -2171,6 +2366,9 @@ class Editor {
       else this.newLabel(p[0], p[1], simplify(p, 2.5 / this.s));
     } else if ((g.kind === 'scale' || g.kind === 'rotate') && g.moved) {
       this.commit({ undo: [g.orig], redo: [clean(this.get(g.id))] });
+    } else if (g.kind === 'shape') {
+      const o = this.shapeFromGesture(g, true);
+      if (o) this.commit({ undo: [{ id: o.id, deleted: true }], redo: [o] });
     } else if (g.kind === 'scatter' && g.placed.length) {
       // Stamps lower on the map overlap the ones behind them, like a landscape.
       const z0 = this.nextZ();
@@ -2184,7 +2382,7 @@ class Editor {
     this.preview.clear();
     this.syncToolbar();
     // The map changes if the drawing did (a click that only selected leaves it alone).
-    if (g.moved || ['draw', 'land', 'terrain', 'path', 'erase', 'place', 'scatter', 'textpath'].includes(g.kind)) this.redraw(); else this.redrawOverlay();
+    if (g.moved || ['draw', 'land', 'terrain', 'path', 'erase', 'place', 'scatter', 'textpath', 'shape'].includes(g.kind)) this.redraw(); else this.redrawOverlay();
   }
 
   // Drop whatever an unfinished gesture changed on screen: it never reached the drawing.
@@ -2322,15 +2520,15 @@ function askName(title, value) {
 }
 
 // Things the select tool can pick up.
-const SELECTABLE = ['stamp', 'label', 'path'];
+const SELECTABLE = ['stamp', 'label', 'path', 'shape'];
 
 // Which field holds an object's editable points, if it has them.
-const ptsKey = (o) => (o.kind === 'path' ? 'points' : o.kind === 'label' && o.along ? 'along' : null);
+const ptsKey = (o) => (o.kind === 'path' || (o.kind === 'shape' && o.shape === 'poly') ? 'points' : o.kind === 'label' && o.along ? 'along' : null);
 
 // The fields that change when an object moves by (dx, dy).
 function shifted(o, dx, dy) {
   const move = (p) => p.map((v, i) => r1(v + (i % 2 ? dy : dx)));
-  if (o.kind === 'path') return { points: move(o.points) };
+  if (ptsKey(o) === 'points') return { points: move(o.points) };
   return { x: r1(o.x + dx), y: r1(o.y + dy), ...(o.along ? { along: move(o.along) } : {}) };
 }
 
@@ -2372,7 +2570,7 @@ export const SHORTCUTS = [
   ['Everywhere', [['Wheel', 'Zoom'], ['Space, or the middle button, and drag', 'Move the view'], ['K or ?', 'This list'], ['/', 'Layers panel'],
     ['Ctrl Z / Ctrl Shift Z (or Y)', 'Undo / redo'], ['G', 'Snap stamps to the grid, on or off'], ['Ctrl Shift ↑ ↓', 'Layer to draw on: up / down'],
     ['Shift ↑ ↓', 'The slider last moved: up / down'], ['Tab', 'Previous tool'], ['0, or Ctrl 0', 'Fit the map'], ['+  −', 'Zoom']]],
-  ['Tools', [['V', 'Select'], ['M', 'Land and water'], ['B', 'Brush (textures)'], ['O', 'Stamp'], ['L', 'Lines'], ['T', 'Text'],
+  ['Tools', [['V', 'Select'], ['M', 'Land and water'], ['B', 'Brush (textures)'], ['O', 'Stamp'], ['R', 'Shapes'], ['L', 'Lines'], ['T', 'Text'],
     ['P', 'Pen'], ['U', 'Eraser'], ['H', 'Move the view']]],
   ['Select', [['Ctrl A', 'Select all'], ['` or ~', 'Bring back the last selection'], ['Esc', 'Deselect (or cancel what’s half done)'],
     ['Del or Backspace', 'Delete'], ['Ctrl C / X / V, Ctrl D', 'Copy, cut, paste, duplicate'], ['Ctrl G / Ctrl Shift G', 'Group / ungroup'],
@@ -2385,6 +2583,9 @@ export const SHORTCUTS = [
   ['Stamp', [['F', 'Stamp catalogue'], ['W / S, or Shift + wheel', 'Size'], ['E / D', 'Opacity'], ['Q / A', 'Area (placing many)'], ['Alt Q / Alt A', 'Density (placing many)'],
     ['Alt → ←, or Alt + wheel', 'Next / previous in the set'], ['> / <', 'Turn the next stamp'], ['Shift F', 'Flip the next stamp'],
     ['Ctrl click a picture', 'Pick several to place at random']]],
+  ['Shape', [['X', 'Add / cut out'], ['W / S', 'Outline width'], ['E / D', 'Opacity'], ['F', 'Fill texture'],
+    ['Shift (dragging)', 'Square or circle'], ['Alt (dragging)', 'Draw from the middle'],
+    ['Click the first point, or Enter', 'Finish a polygon'], ['Backspace', 'Take back the last point'], ['Esc', 'Drop the polygon']]],
   ['Text', [['W / S', 'Size'], [']  [', 'Next / previous font'], ['Q / A', 'Curve']]],
   ['Pen, lines and eraser', [['W / S', 'Size'], ['E / D', 'Opacity (pen)'], ['Q / A', 'Softness (pen)']]],
 ];

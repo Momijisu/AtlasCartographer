@@ -247,3 +247,16 @@ kbd { font: 500 .82rem var(--mono); background: var(--ink-3); border: 1px solid 
 
 /* The hand tool is for touch screens; with a mouse, Space or the middle button moves the view. */
 @media not (any-pointer: coarse) { .toolrail .touch-only { display: none; } }
+
+/* Shape tool options */
+.toolbar .tb-check { display: inline-flex; align-items: center; gap: .3rem; font: 500 .82rem var(--sans); color: var(--text-2); white-space: nowrap; flex-shrink: 0; margin: 0 .15rem; cursor: pointer; }
+.toolbar .tb-check input { margin: 0; accent-color: var(--rubric); }
+.toolbar .shape-fill-color, .toolbar .shape-stroke-color { -webkit-appearance: none; appearance: none; box-sizing: border-box; width: 26px; height: 26px; min-width: 26px; min-height: 0; flex: 0 0 26px; padding: 0; background: none; border: 2px solid var(--ink-2); border-radius: 50%; overflow: hidden; cursor: pointer; box-shadow: 0 0 0 1px var(--rule-strong); }
+.shape-fill-color::-webkit-color-swatch-wrapper, .shape-stroke-color::-webkit-color-swatch-wrapper { padding: 0; }
+.shape-fill-color::-webkit-color-swatch, .shape-stroke-color::-webkit-color-swatch { border: 0; border-radius: 50%; }
+.shape-fill-color::-moz-color-swatch, .shape-stroke-color::-moz-color-swatch { border: 0; border-radius: 50%; }
+.toolbar .shape-width, .toolbar .shape-opacity { width: 72px; min-height: 0; padding: 0; flex-shrink: 0; accent-color: var(--rubric); background: transparent; border: 0; }
+.shape-kind, .shape-mode, .shape-dash { flex-shrink: 0; }
+.shape-kind button, .shape-mode button, .shape-dash button { padding: .4em .6em; }
+.shape-dash button { letter-spacing: .05em; }
+.shape-kind button .i { width: 18px; height: 18px; }

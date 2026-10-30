@@ -276,6 +276,7 @@ export function transformObject(o, k, dx, dy) {
   if (o.x != null) { out.x = r(o.x * k + dx); out.y = r(o.y * k + dy); }
   if (o.w != null) { out.w = r(o.w * k); out.h = r(o.h * k); }
   if (o.width != null) out.width = r(o.width * k);
+  if (o.strokeWidth != null) out.strokeWidth = r(o.strokeWidth * k);
   if (o.size != null) out.size = r(o.size * k);
   if (o.kind === 'style') {
     if (o.gridSize) out.gridSize = r(o.gridSize * k);

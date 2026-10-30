@@ -167,8 +167,11 @@ export function drawDoc(ctx, project, doc, { image = () => null, placeholder = f
   const byLayer = new Map(order.map((id) => [id, []]));
   for (const o of objs) if (inView(o, view, shadow)) byLayer.get(lay(o))?.push(o);
   for (const id of order) {
-    for (const o of byLayer.get(id)) {
-      if (o.kind === 'stroke') drawStroke(ctx, o);
+    const list = byLayer.get(id);
+    const groups = list.some((o) => o.kind === 'shape') ? shapeGroups(list.filter((o) => o.kind === 'shape')) : null;
+    for (const o of list) {
+      if (o.kind === 'shape') { const g = groups.get(o.id); if (g) drawShapeGroup(ctx, g, image, st, view); }
+      else if (o.kind === 'stroke') drawStroke(ctx, o);
       else if (o.kind === 'path') drawPath(ctx, o, st);
       else if (o.kind === 'stamp') drawStamp(ctx, o, image(o.asset), placeholder, shadow);
     }
@@ -200,6 +203,9 @@ function inView(o, v, shadow) {
   } else if (o.kind === 'stroke' || o.kind === 'path') {
     if (!o.points || o.points.length < 2) return true;
     const b = box_(o, 'points'), pad = o.kind === 'path' ? o.width * 1.5 + 4 : o.width / 2 + (o.soft || 0) * o.width * 0.5 + 2;
+    return b[2] + pad >= v[0] && b[0] - pad <= v[2] && b[3] + pad >= v[1] && b[1] - pad <= v[3];
+  } else if (o.kind === 'shape') {
+    const b = shapeBox(o), pad = shapePad(o);
     return b[2] + pad >= v[0] && b[0] - pad <= v[2] && b[3] + pad >= v[1] && b[1] - pad <= v[3];
   } else if (o.kind === 'label') {
     if (!o.text) return false;
@@ -359,10 +365,10 @@ export function editorLandScale(project) {
 // kind of thing (their ids are the kinds), and any the user adds. Each object
 // is on its `layer`, or its kind's own layer when it has none (or that layer
 // was deleted).
-export const BUILTIN_LAYERS = [{ id: 'label', name: 'Labels' }, { id: 'stamp', name: 'Stamps' }, { id: 'stroke', name: 'Ink and paths' }];
+export const BUILTIN_LAYERS = [{ id: 'label', name: 'Labels' }, { id: 'stamp', name: 'Stamps' }, { id: 'stroke', name: 'Ink, paths and shapes' }];
 export const LAND_LAYER = { id: 'land', name: 'Land and sea' };
 export const docLayers = (doc) => (docStyle(doc).layers?.length ? docStyle(doc).layers : BUILTIN_LAYERS);
-export const kindLayer = (o) => ({ path: 'stroke', terrain: 'land' }[o.kind] || o.kind);
+export const kindLayer = (o) => ({ path: 'stroke', shape: 'stroke', terrain: 'land' }[o.kind] || o.kind);
 // (object) → the id of the layer it's on, for this map.
 export function layerResolver(doc) {
   const ids = new Set(docLayers(doc).map((l) => l.id));
@@ -990,4 +996,187 @@ export function simplify(p, tol) {
   const out = [];
   for (let i = 0; i < n; i++) if (keep[i]) out.push(p[2 * i], p[2 * i + 1]);
   return out;
+}
+
+// --- shapes ---------------------------------------------------------------
+//
+// kind 'shape': a rectangle or ellipse (shape 'rect' | 'ellipse': centre x, y,
+// w, h, rot, like a stamp) or a polygon (shape 'poly': points, closed). Each
+// has an optional fill (fillColor, or fillTex: a texture) and an optional
+// outline (strokeColor, strokeWidth, dash: 'solid' | 'dotted' | 'dashed')
+// drawn just outside its edge, plus opacity.
+//
+// merge: shapes that merge, on the same layer and with the same look, are
+// drawn as one: their outlines run only round the outside of the whole, so
+// overlapping rooms make one floor plan. mode 'subtract' cuts a shape out of
+// the merged shapes it overlaps, with an outline round the hole.
+
+export const SHAPE_DEFAULTS = { fill: true, fillColor: '#d9c9a3', fillTex: null, stroke: true, strokeColor: '#2b2118', strokeWidth: 6, dash: 'solid', opacity: 1 };
+const shapeLook = (o) => [o.fill, o.fillColor, o.fillTex, o.stroke, o.strokeColor, o.strokeWidth, o.dash, o.opacity ?? 1].join('|');
+
+// The shape's outline as a path in map pixels.
+export function shapePath(ctx, o) {
+  if (o.shape === 'poly') {
+    const p = o.points;
+    if (!p || p.length < 6) return;
+    ctx.moveTo(p[0], p[1]);
+    for (let i = 2; i < p.length; i += 2) ctx.lineTo(p[i], p[i + 1]);
+    ctx.closePath();
+  } else if (o.shape === 'ellipse') {
+    ctx.moveTo(o.x + Math.cos(o.rot || 0) * o.w / 2, o.y + Math.sin(o.rot || 0) * o.w / 2);
+    ctx.ellipse(o.x, o.y, Math.abs(o.w) / 2, Math.abs(o.h) / 2, o.rot || 0, 0, Math.PI * 2);
+    ctx.closePath();
+  } else {
+    const c = Math.cos(o.rot || 0), s = Math.sin(o.rot || 0);
+    [[-1, -1], [1, -1], [1, 1], [-1, 1]].forEach(([sx, sy], i) => {
+      const lx = sx * o.w / 2, ly = sy * o.h / 2;
+      ctx[i ? 'lineTo' : 'moveTo'](o.x + lx * c - ly * s, o.y + lx * s + ly * c);
+    });
+    ctx.closePath();
+  }
+}
+
+// [x0, y0, x1, y1] round a shape, without its outline.
+export function shapeBox(o) {
+  if (o.shape === 'poly') return pointsBox(o.points);
+  const c = Math.abs(Math.cos(o.rot || 0)), s = Math.abs(Math.sin(o.rot || 0));
+  const hw = (Math.abs(o.w) * c + Math.abs(o.h) * s) / 2, hh = (Math.abs(o.w) * s + Math.abs(o.h) * c) / 2;
+  return [o.x - hw, o.y - hh, o.x + hw, o.y + hh];
+}
+const shapePad = (o) => (o.stroke ? (o.strokeWidth || 0) : 0) + 2;
+
+let hitCtx;
+// Is (x, y) inside the shape (or, for one with only an outline, on it)?
+export function shapeHit(o, x, y, slack = 0) {
+  hitCtx ??= document.createElement('canvas').getContext('2d');
+  hitCtx.beginPath();
+  shapePath(hitCtx, o);
+  if (o.fill || o.mode === 'subtract') return hitCtx.isPointInPath(x, y) || (slack > 0 && near());
+  return near();
+  function near() { hitCtx.lineWidth = 2 * (o.stroke ? o.strokeWidth : 0) + 2 * slack; return hitCtx.isPointInStroke(x, y); }
+}
+
+function shapeFill(ctx, o, image, st) {
+  const img = o.fillTex && image(o.fillTex);
+  return img ? texturePattern(ctx, img, st) : o.fillColor || SHAPE_DEFAULTS.fillColor;
+}
+
+function setDash(ctx, o, w) {
+  ctx.lineCap = o.dash === 'dotted' ? 'round' : 'butt';
+  ctx.lineJoin = 'round';
+  ctx.setLineDash(o.dash === 'dotted' ? [0.001, w * 1.6] : o.dash === 'dashed' ? [w * 2.5, w * 1.5] : []);
+}
+
+// The shapes on one layer, in groups that draw together: each merging look
+// is one group (with the subtracting shapes that overlap it), every other
+// shape its own. Returns Map(the id of the group's topmost shape → group),
+// so the group is drawn where that shape comes in the layer's order.
+export function shapeGroups(list) {
+  const groups = new Map(), byLook = new Map(), subs = [];
+  for (const o of list) {
+    if (o.mode === 'subtract') { if (o.merge !== false) subs.push(o); continue; }
+    if (o.merge === false) { groups.set(o.id, { adds: [o], subs: [] }); continue; }
+    const k = shapeLook(o);
+    let g = byLook.get(k);
+    if (!g) byLook.set(k, g = { adds: [], subs: [] });
+    g.adds.push(o);
+  }
+  for (const g of byLook.values()) {
+    const b = g.adds.map(shapeBox).reduce((a, c) => [Math.min(a[0], c[0]), Math.min(a[1], c[1]), Math.max(a[2], c[2]), Math.max(a[3], c[3])]);
+    g.subs = subs.filter((s) => { const q = shapeBox(s); return q[2] >= b[0] && q[0] <= b[2] && q[3] >= b[1] && q[1] <= b[3]; });
+    groups.set(g.adds[g.adds.length - 1].id, g); // the list is in z order
+  }
+  return groups;
+}
+
+const pool = [];
+const scratch = (i, w, h) => {
+  const c = pool[i] ??= document.createElement('canvas');
+  if (c.width !== w || c.height !== h) { c.width = w; c.height = h; return c; }
+  const g = c.getContext('2d');
+  g.setTransform(1, 0, 0, 1, 0, 0);
+  g.globalCompositeOperation = 'source-over';
+  g.globalAlpha = 1;
+  g.setLineDash([]);
+  g.clearRect(0, 0, w, h);
+  return c;
+};
+
+// Draws a group of shapes (see shapeGroups). view: the part of the map that
+// needs drawing, or null for all of it.
+export function drawShapeGroup(ctx, { adds, subs }, image = () => null, st = STYLE, view = null) {
+  const o = adds[0];
+  const w = o.stroke ? Math.max(0.5, o.strokeWidth || 0) : 0;
+  ctx.save();
+  if ((o.opacity ?? 1) < 1) ctx.globalAlpha *= o.opacity;
+  // One shape on its own: straight onto the map, the outline clipped to outside it.
+  if (adds.length === 1 && !subs.length) {
+    if (o.fill) { ctx.beginPath(); shapePath(ctx, o); ctx.fillStyle = shapeFill(ctx, o, image, st); ctx.fill(); }
+    if (w) {
+      const b = shapeBox(o), p = w * 2 + 2;
+      ctx.beginPath();
+      ctx.rect(b[0] - p, b[1] - p, b[2] - b[0] + 2 * p, b[3] - b[1] + 2 * p);
+      shapePath(ctx, o);
+      ctx.clip('evenodd');
+      ctx.beginPath(); shapePath(ctx, o);
+      ctx.lineWidth = 2 * w; ctx.strokeStyle = o.strokeColor; setDash(ctx, o, 2 * w);
+      ctx.stroke();
+    }
+    ctx.restore();
+    return;
+  }
+  // Several: drawn on their own canvases at the map's current resolution,
+  // then copied in. R is the merged area (adds less subs).
+  let b = adds.map(shapeBox).reduce((a, c) => [Math.min(a[0], c[0]), Math.min(a[1], c[1]), Math.max(a[2], c[2]), Math.max(a[3], c[3])]);
+  b = [b[0] - w - 2, b[1] - w - 2, b[2] + w + 2, b[3] + w + 2];
+  if (view) b = [Math.max(b[0], view[0]), Math.max(b[1], view[1]), Math.min(b[2], view[2]), Math.min(b[3], view[3])];
+  if (b[2] <= b[0] || b[3] <= b[1]) { ctx.restore(); return; }
+  const m = ctx.getTransform();
+  let k = Math.hypot(m.a, m.b) || 1;
+  k = Math.min(k, 4096 / (b[2] - b[0]), 4096 / (b[3] - b[1]));
+  const W = Math.max(1, Math.ceil((b[2] - b[0]) * k)), H = Math.max(1, Math.ceil((b[3] - b[1]) * k));
+  const set = (c) => { const g = c.getContext('2d'); g.setTransform(k, 0, 0, k, -b[0] * k, -b[1] * k); g.globalCompositeOperation = 'source-over'; return g; };
+  const fillAll = (g, list) => { g.beginPath(); for (const s of list) shapePath(g, s); g.fill('nonzero'); };
+  const strokeAll = (g, list) => { for (const s of list) { g.beginPath(); shapePath(g, s); g.stroke(); } };
+  const R = scratch(0, W, H), r = set(R);
+  r.fillStyle = '#000';
+  for (const s of adds) { r.beginPath(); shapePath(r, s); r.fill(); }
+  r.globalCompositeOperation = 'destination-out';
+  for (const s of subs) { r.beginPath(); shapePath(r, s); r.fill(); }
+  if (o.fill) {
+    const F = scratch(1, W, H), f = set(F);
+    f.fillStyle = shapeFill(f, o, image, st);
+    f.fillRect(b[0], b[1], b[2] - b[0], b[3] - b[1]);
+    f.globalCompositeOperation = 'destination-in';
+    f.setTransform(1, 0, 0, 1, 0, 0);
+    f.drawImage(R, 0, 0);
+    ctx.drawImage(F, b[0], b[1], W / k, H / k);
+  }
+  if (w) {
+    // The adds' outlines, less where they've been cut away…
+    const O = scratch(1, W, H), g = set(O);
+    g.lineWidth = 2 * w; g.strokeStyle = o.strokeColor; setDash(g, o, 2 * w);
+    strokeAll(g, adds);
+    if (subs.length) {
+      g.globalCompositeOperation = 'destination-out';
+      g.fillStyle = '#000';
+      for (const s of subs) { g.beginPath(); shapePath(g, s); g.fill(); }
+      // …plus the holes' outlines where they lie in the shapes…
+      const T = scratch(2, W, H), t = set(T);
+      t.lineWidth = 2 * w; t.strokeStyle = o.strokeColor; setDash(t, o, 2 * w);
+      strokeAll(t, subs);
+      t.globalCompositeOperation = 'destination-in';
+      t.fillStyle = '#000';
+      fillAll(t, adds);
+      g.globalCompositeOperation = 'source-over';
+      g.setTransform(1, 0, 0, 1, 0, 0);
+      g.drawImage(T, 0, 0);
+    }
+    // …and only the parts outside the merged area.
+    g.globalCompositeOperation = 'destination-out';
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.drawImage(R, 0, 0);
+    ctx.drawImage(O, b[0], b[1], W / k, H / k);
+  }
+  ctx.restore();
 }
