@@ -1385,7 +1385,7 @@ class Editor {
     this.pickAll ??= new Set(); // long categories shown in full
     if (query) {
       const words = query.split(/\s+/);
-      const hits = A.liveAssets().filter((a) => a.kind === kind && order.has(a.pack)
+      const hits = A.livePlaced().filter((a) => a.kind === kind && order.has(a.pack)
         && words.every((w) => `${a.name} ${a.category} ${a.pack}`.toLowerCase().includes(w)))
         .sort((a, b) => order.get(a.pack) - order.get(b.pack) || a.category.localeCompare(b.category) || byName(a, b)).slice(0, 300);
       const groups = new Map();

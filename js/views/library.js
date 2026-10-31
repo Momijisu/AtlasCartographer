@@ -21,7 +21,7 @@ export async function viewLibrary(view) {
   const ps = A.packs();
   const blobs = await A.blobIds();
   const onDevice = new Map(ps.map((p) => [p.name, 0]));
-  for (const a of A.liveAssets()) if (blobs.has(a.id)) onDevice.set(a.pack, onDevice.get(a.pack) + 1);
+  for (const a of A.livePlaced()) if (blobs.has(a.id)) onDevice.set(a.pack, onDevice.get(a.pack) + 1);
   view.innerHTML = `
     <div class="page-head"><div><h1>Art library</h1></div>
       <div class="actions">
@@ -158,7 +158,7 @@ export async function viewPack(view, name) {
   if (!p) { location.hash = '#/library'; return; }
   setTitle(name);
   const byCat = new Map(p.categories.map((c) => [c.name, []]));
-  for (const a of A.liveAssets()) if (a.pack === name) byCat.get(A.groupOf(a)).push(a);
+  for (const a of A.livePlaced()) if (a.pack === name) byCat.get(A.groupOf(a)).push(a);
   // Categories stay open (and the page where it was) when it's redrawn after a change.
   const opened = openCats.get(name) || new Set(p.count <= 400 ? p.categories.map((c) => c.name) : []);
   openCats.set(name, opened);
@@ -268,7 +268,7 @@ export async function viewPack(view, name) {
       // Without a stamp name, each keeps its own; with one, they become variations of one stamp.
       for (const key of sel) {
         const s1 = sets.get(key);
-        await A.moveAssets(s1.items.map((a) => a.id), { pack: to.pack, category: to.category, stamp: to.stamp || (s1.items[0].category.includes('/') ? s1.name : '') });
+        await A.moveAssets(s1.items.map((a) => a.id), { pack: to.pack, category: to.category, stamp: to.stamp || (s1.items[0].category.includes('/') ? s1.name : '') }, name);
       }
       toast(`Moved to ${to.pack === name ? '' : `${to.pack} · `}${to.category || 'General'}`);
       sel.clear();
@@ -281,7 +281,7 @@ export async function viewPack(view, name) {
     } else if (act === 'delete') {
       const ids = selIds();
       if (!(await confirmDialog(`Delete these ${num(ids.length)} images from all your devices and OneDrive? Maps that use them will show gaps.`, 'Delete'))) return;
-      await A.deleteAssets(ids);
+      await A.deleteAssets(ids, name);
       sel.clear();
       redraw();
     }
@@ -306,7 +306,8 @@ export async function viewPack(view, name) {
   };
   $('#exportPack').onclick = () => exportPackFile(name);
   $('#delPack').onclick = async () => {
-    if (!(await confirmDialog(`Delete “${name}” and its ${num(p.count)} images from all your devices and OneDrive? Maps that use them will show gaps.`, 'Delete pack'))) return;
+    const shared = A.livePlaced().filter((a) => a.pack === name && A.placements(A.asset(a.id)).length > 1).length;
+    if (!(await confirmDialog(`Delete “${name}” and its ${num(p.count)} images from all your devices and OneDrive? Maps that use them will show gaps.${shared ? ` (${num(shared)} of them are also in other packs, and stay there.)` : ''}`, 'Delete pack'))) return;
     await A.deletePack(name);
     toast('Pack deleted');
     location.hash = '#/library';
@@ -475,18 +476,18 @@ async function stampDialog(pack, st) {
   const all = st.items.map((a) => a.id), ids = chosen.size ? [...chosen] : all;
   if (res.a === 'delete') {
     if (!(await confirmDialog(`Delete ${ids.length === 1 ? 'this image' : `these ${ids.length} images`} from all your devices and OneDrive? Maps that use ${ids.length === 1 ? 'it' : 'them'} will show gaps.`, 'Delete'))) return false;
-    await A.deleteAssets(ids);
+    await A.deleteAssets(ids, pack);
     return true;
   }
   if (res.a === 'move') {
     const to = await moveDialog(pack, chosen.size ? `Move ${chosen.size} variations` : `Move “${st.name}”`, chosen.size ? '' : res.name || st.name, false, st.cat);
     if (!to) return false;
-    await A.moveAssets(ids, to);
+    await A.moveAssets(ids, to, pack);
     toast(`Moved to ${to.pack === pack ? '' : `${to.pack} · `}${to.category || 'General'}${to.stamp ? ` · ${to.stamp}` : ''}`);
     return true;
   }
   let changed = false;
-  if (res.name && res.name !== st.name) { await A.renameStamp(all, res.name); changed = true; }
+  if (res.name && res.name !== st.name) { await A.renameStamp(all, res.name, pack); changed = true; }
   if ((res.size || null) !== (st.items[0].defaultSize || null)) { await A.setDefaultSize(all, res.size); changed = true; }
   return changed;
 }

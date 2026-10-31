@@ -21,7 +21,7 @@ const safe = (s) => s.replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').replace(/^\.+/,
 // any that can't be (not uploaded yet, or offline) are left out and counted.
 // onProgress({ stage: 'gathering' | 'writing', done, total }).
 export async function exportPack(name, onProgress = () => {}) {
-  const list = A.liveAssets().filter((a) => a.pack === name).sort(A.byName);
+  const list = A.livePlaced().filter((a) => a.pack === name).sort(A.byName);
   if (!list.length) throw new Error('This pack has no images.');
   const pack = A.packs().find((p) => p.name === name);
   const files = new Array(list.length);

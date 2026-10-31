@@ -30,6 +30,35 @@ export async function loadAssets() {
 }
 
 export const liveAssets = () => [...assets.values()].filter((a) => !a.deleted);
+
+// A picture is stored once, however many packs include it. Its record says
+// where it first came in (pack, category, name, kind, mapType) and, in
+// `also`, the other packs that include the same file, each with those fields
+// of its own. A placement is the picture as one pack sees it.
+const PLACE = ['pack', 'category', 'name', 'kind', 'mapType'];
+export const placements = (a) => (a.also?.length ? [a, ...a.also.map((p) => ({ ...a, ...p, also: undefined }))] : [a]);
+export const livePlaced = () => liveAssets().flatMap(placements);
+// The picture as the given pack sees it (or null).
+export const placedIn = (a, pack) => placements(a).find((p) => p.pack === pack) || null;
+// A record with its placement in `pack` changed by fn (placement fields →
+// new fields, or null to take the picture out of that pack). Returns null if
+// no pack would include it any more.
+function replace(a, pack, fn) {
+  const list = placements(a).map((p) => {
+    if (p.pack !== pack) return p;
+    const out = fn(Object.fromEntries(PLACE.map((k) => [k, p[k]])));
+    return out && { ...p, ...out };
+  }).filter(Boolean);
+  // Two placements in the same pack (after a move into it) are one.
+  const seen = new Set(), keep = list.filter((p) => !seen.has(p.pack) && seen.add(p.pack));
+  if (!keep.length) return null;
+  const [first, ...rest] = keep;
+  const base = { ...a };
+  for (const k of PLACE) delete base[k];
+  delete base.also;
+  const pick = (p) => Object.fromEntries(PLACE.filter((k) => p[k] != null).map((k) => [k, p[k]]));
+  return { ...base, ...pick(first), ...(rest.length ? { also: rest.map(pick) } : {}) };
+}
 export const asset = (id) => { const a = assets.get(id); return a && !a.deleted ? a : null; };
 
 export const EXT = { 'image/png': 'png', 'image/webp': 'webp', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/svg+xml': 'svg', 'image/avif': 'avif' };
@@ -63,7 +92,7 @@ function fresh() {
   memo.sorted.clear();
   memo.sets.clear();
   memo.groups = new Map();
-  for (const a of liveAssets()) {
+  for (const a of livePlaced()) {
     const key = `${a.pack}\u0000${groupOf(a)}`;
     const list = memo.groups.get(key);
     if (list) list.push(a); else memo.groups.set(key, [a]);
@@ -120,7 +149,7 @@ export function packs() {
 
 function buildPacks() {
   const by = new Map();
-  for (const a of liveAssets()) {
+  for (const a of livePlaced()) {
     let p = by.get(a.pack);
     if (!p) by.set(a.pack, p = { name: a.pack, count: 0, bytes: 0, cats: new Map(), type: 'any' });
     if (a.mapType && p.type === 'any') p.type = a.mapType;
@@ -146,14 +175,22 @@ async function saveRecords(recs) {
   notify({ local: true, store: 'assets' });
 }
 
+// Pictures another pack also includes stay, in that pack.
 export async function deletePack(name) {
-  await deleteAssets(liveAssets().filter((a) => a.pack === name).map((a) => a.id));
+  await deleteAssets(livePlaced().filter((a) => a.pack === name).map((a) => a.id), name);
   await saveMeta({ pinned: meta.pinned.filter((p) => p !== name) });
 }
 
-// Delete pictures from every device and OneDrive.
-export async function deleteAssets(ids) {
-  const gone = ids.map((id) => assets.get(id)).filter((a) => a && !a.deleted);
+// Take pictures out of a pack; those no other pack includes are deleted
+// from every device and OneDrive. With no pack, they're deleted outright.
+export async function deleteAssets(ids, pack = null) {
+  const recs = ids.map((id) => assets.get(id)).filter((a) => a && !a.deleted);
+  const kept = [], gone = [];
+  for (const a of recs) {
+    const r = pack == null ? null : replace(a, pack, () => null);
+    if (r) kept.push(r); else gone.push(a);
+  }
+  await saveRecords(kept);
   // Tombstones keep the type: it names the file to remove from OneDrive.
   await saveRecords(gone.map((a) => ({ id: a.id, type: a.type, deleted: true })));
   await dropLocal(gone.map((a) => a.id));
@@ -162,12 +199,22 @@ export async function deleteAssets(ids) {
   await db.putMany('assetState', gone.map((a) => ({ ...cleared(states.get(a.id) || { id: a.id }), purgePending: true, purged: false })));
 }
 
+// Change the placements in a pack that match: test(placement) → fields.
+async function editPack(pack, test, fields) {
+  const recs = [];
+  for (const a of liveAssets()) {
+    const p = placedIn(a, pack);
+    if (p && test(p)) recs.push(replace(a, pack, (q) => ({ ...q, ...fields(q) })));
+  }
+  await saveRecords(recs.filter(Boolean));
+}
+
 export async function setPackType(pack, type) {
-  await saveRecords(liveAssets().filter((a) => a.pack === pack && (a.mapType || 'any') !== type).map((a) => ({ ...a, mapType: type })));
+  await editPack(pack, (p) => (p.mapType || 'any') !== type, () => ({ mapType: type }));
 }
 
 export async function setCategoryKind(pack, category, kind) {
-  await saveRecords(liveAssets().filter((a) => a.pack === pack && groupOf(a) === category && a.kind !== kind).map((a) => ({ ...a, kind })));
+  await editPack(pack, (p) => groupOf(p) === category && p.kind !== kind, () => ({ kind }));
 }
 
 // --- reorganising ------------------------------------------------------
@@ -175,29 +222,30 @@ export async function setCategoryKind(pack, category, kind) {
 // Move pictures to a pack, category and stamp (stamp '' leaves each one a
 // stamp of its own). They take on the category's stamps/textures setting if
 // it's already there, and the pack's map type.
-export async function moveAssets(ids, { pack, category, stamp = '' }) {
+// `from` is the pack they're being moved out of (other packs that include
+// them keep them where they are).
+export async function moveAssets(ids, { pack, category, stamp = '' }, from) {
   const target = packs().find((p) => p.name === pack);
   const kind = target?.categories.find((c) => c.name === category)?.kind;
   const path = stamp ? `${category}/${stamp}` : category;
-  const recs = ids.map((id) => assets.get(id)).filter((a) => a && !a.deleted).map((a) => ({
-    ...a, pack, category: path,
+  const recs = ids.map((id) => assets.get(id)).filter((a) => a && !a.deleted).map((a) => replace(a, from ?? a.pack, (p) => ({
+    ...p, pack, category: path,
     ...(kind ? { kind } : {}),
-    ...(target && target.name !== a.pack ? (target.type !== 'any' ? { mapType: target.type } : { mapType: null }) : {}),
-  }));
+    ...(pack !== p.pack ? { mapType: target && target.type !== 'any' ? target.type : null } : {}),
+  }))).filter(Boolean);
   await saveRecords(recs);
   return recs.length;
 }
 
 // Rename a category (or merge it into another, if that name is taken).
 export async function renameCategory(pack, from, to) {
-  await saveRecords(liveAssets().filter((a) => a.pack === pack && groupOf(a) === from)
-    .map((a) => ({ ...a, category: to + a.category.slice(from.length) })));
+  await editPack(pack, (p) => groupOf(p) === from, (p) => ({ category: to + p.category.slice(from.length) }));
 }
 
-// Rename a stamp: its pictures become (or stay) a folder of variations.
-export async function renameStamp(ids, to) {
-  await saveRecords(ids.map((id) => assets.get(id)).filter((a) => a && !a.deleted)
-    .map((a) => ({ ...a, category: `${groupOf(a)}/${to}` })));
+// Rename a stamp in a pack: its pictures become (or stay) a folder of variations.
+export async function renameStamp(ids, to, pack) {
+  const want = new Set(ids);
+  await editPack(pack, (p) => want.has(p.id), (p) => ({ category: `${groupOf(p)}/${to}` }));
 }
 
 // The size (longer side, map pixels) a stamp starts at when picked, or null.
@@ -330,6 +378,7 @@ export async function importEntries(entries, pack, onProgress = () => {}, opts =
   // Pictures added to a category that's already there are stamps or textures as it is.
   const kindOf = new Map((existing?.categories || []).map((c) => [c.name, c.kind]));
   let ready = [];
+  const also = []; // pictures already in the library, added to this pack too
   let saving = Promise.resolve();
   const flush = () => {
     const batch = ready;
@@ -357,7 +406,19 @@ export async function importEntries(entries, pack, onProgress = () => {}, opts =
         const id = await hash(blob);
         // (No waiting between checking and taking an id, so two workers
         // holding the same picture can't both add it.)
-        if (asset(id) || seen.has(id)) { progress.skipped++; continue; }
+        if (seen.has(id)) { progress.skipped++; continue; }
+        // Already in the library: added to this pack too, unless it's already in it.
+        const had = asset(id);
+        if (had) {
+          seen.add(id);
+          if (placedIn(had, pack)) { progress.skipped++; continue; }
+          const parts = e.path.split('/'), file = parts.pop(), category = e.category ?? parts.join('/');
+          const kind = e.kind === 'texture' || e.kind === 'stamp' ? e.kind : kindOf.get(category.split('/')[0]) || guessKind(category);
+          const place = { pack, category, name: e.name || file.replace(/\.[^.]+$/, ''), kind, ...(mapType && mapType !== 'any' ? { mapType } : {}) };
+          also.push({ ...had, also: [...(had.also || []), place] });
+          progress.added++;
+          continue;
+        }
         seen.add(id);
         const { thumb, w, h } = await makeThumb(blob);
         const parts = e.path.split('/');
@@ -378,5 +439,6 @@ export async function importEntries(entries, pack, onProgress = () => {}, opts =
   };
   await Promise.all(Array.from({ length: Math.min(IMPORT_WIDE, list.length) }, worker));
   await flush();
+  await saveRecords(also);
   return progress;
 }

@@ -231,7 +231,7 @@ async function download(force) {
   const blobs = await A.blobIds();
   const pinned = new Set(meta.pinned);
   const wantThumbs = live.filter((a) => !thumbs.has(a.id) && !waiting(states.get(a.id)));
-  const wantBlobs = live.filter((a) => pinned.has(a.pack) && !blobs.has(a.id) && !waiting(states.get(a.id)));
+  const wantBlobs = live.filter((a) => A.placements(a).some((p) => pinned.has(p.pack)) && !blobs.has(a.id) && !waiting(states.get(a.id)));
   if (!wantThumbs.length && !wantBlobs.length) return [];
   const thumbUrls = wantThumbs.length ? await listed('thumbs', force) : new Map();
   const blobUrls = wantBlobs.length ? await listed('assets', force) : new Map();
