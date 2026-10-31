@@ -48,13 +48,19 @@ export async function renderMap(project, { type = 'image/png', scale = 1 } = {})
   const ids = [...new Set(store.liveObjects(doc).filter((o) => o.kind === 'stamp').map((o) => o.asset))];
   const tex = doc.objects.style && !doc.objects.style.deleted && doc.objects.style.landTexture;
   if (tex) ids.push(tex);
-  for (const t of store.liveObjects(doc)) if (t.kind === 'terrain' && t.texture && !ids.includes(t.texture)) ids.push(t.texture);
+  // Textures: the land's, the terrain brush's, shape fills, and the paper.
+  // Patterns need the whole picture, so these aren't decoded smaller.
+  const special = new Set(tex ? [tex] : []);
+  for (const t of store.liveObjects(doc)) {
+    const id = t.kind === 'terrain' ? t.texture : t.kind === 'shape' && t.fill ? t.fillTex : null;
+    if (id) special.add(id);
+  }
   const paper = doc.objects.style && !doc.objects.style.deleted && doc.objects.style.overlay;
-  if (paper && !ids.includes(paper)) ids.push(paper);
-  // Each picture is decoded no larger than the biggest it's drawn here (with
+  if (paper) special.add(paper);
+  for (const id of special) if (!ids.includes(id)) ids.push(id);
+  // Each stamp is decoded no larger than the biggest it's drawn here (with
   // some to spare), which keeps a map full of small stamps from needing the
   // whole library in memory at full size.
-  const special = new Set(ids.filter((id) => id === tex || id === paper || store.liveObjects(doc).some((t) => t.kind === 'terrain' && t.texture === id))); // patterns need the whole picture
   const need = new Map();
   for (const o of store.liveObjects(doc)) if (o.kind === 'stamp') need.set(o.asset, Math.max(need.get(o.asset) || 0, Math.max(o.w, o.h) * scale * 1.5));
   const pics = new Map();
