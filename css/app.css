@@ -287,3 +287,17 @@ details.cat[open] .cat-name .caret { transform: rotate(90deg); }
 .pack-type { margin: 0; gap: .5rem; white-space: nowrap; }
 .pack-type select { width: auto; min-height: 34px; padding: .2em .5em; }
 .row { display: grid; grid-template-columns: 1fr 1fr; gap: .7rem; }
+
+/* Library: one tile per stamp, selectable, with its variation count and default size */
+.lib-stamp { position: relative; cursor: pointer; min-width: 0; }
+.lib-stamp > .tile { width: 100%; }
+.lib-stamp-name { display: block; font: 500 .72rem/1.2 var(--sans); color: var(--text-2); margin-top: .2rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lib-stamp .pk-badge { position: absolute; right: 3px; top: calc(100% - 1.95rem); min-width: 1.2rem; height: 1.05rem; padding: 0 .25rem; border: 1px solid var(--rule-strong); border-radius: 4px; background: color-mix(in srgb, var(--ink-1) 88%, transparent); color: var(--text-2); font: 600 .65rem/1 var(--sans); display: inline-flex; align-items: center; justify-content: center; pointer-events: none; }
+.lib-stamp .size-tag { position: absolute; left: 3px; top: 3px; padding: 0 .25rem; border-radius: 4px; background: color-mix(in srgb, var(--ink-1) 80%, transparent); color: var(--brass); font: 600 .62rem/1.4 var(--sans); pointer-events: none; }
+.lib-stamp.sel > .tile { border-color: var(--rubric); box-shadow: 0 0 0 2px var(--rubric); }
+.sel-bar { position: sticky; bottom: calc(.75rem + env(safe-area-inset-bottom)); z-index: 5; display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; margin-top: 1rem; padding: .5rem .7rem; background: var(--ink-2); border: 1px solid var(--rule-strong); border-radius: 8px; box-shadow: var(--shadow); }
+.sel-count { margin-right: auto; font: 500 .9rem var(--sans); }
+#selectMode.on { border-color: var(--brass); color: var(--brass); }
+.stamp-vars .tile { cursor: pointer; }
+.stamp-vars .tile.on { border-color: var(--rubric); box-shadow: 0 0 0 2px var(--rubric); }
+summary .icon-btn.small { width: 28px; height: 28px; }

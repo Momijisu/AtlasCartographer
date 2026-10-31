@@ -147,14 +147,19 @@ async function saveRecords(recs) {
 }
 
 export async function deletePack(name) {
-  const gone = liveAssets().filter((a) => a.pack === name);
+  await deleteAssets(liveAssets().filter((a) => a.pack === name).map((a) => a.id));
+  await saveMeta({ pinned: meta.pinned.filter((p) => p !== name) });
+}
+
+// Delete pictures from every device and OneDrive.
+export async function deleteAssets(ids) {
+  const gone = ids.map((id) => assets.get(id)).filter((a) => a && !a.deleted);
   // Tombstones keep the type: it names the file to remove from OneDrive.
   await saveRecords(gone.map((a) => ({ id: a.id, type: a.type, deleted: true })));
   await dropLocal(gone.map((a) => a.id));
   // This device is the one to remove their files from OneDrive (see assetsync.js).
   const states = await allStates();
   await db.putMany('assetState', gone.map((a) => ({ ...cleared(states.get(a.id) || { id: a.id }), purgePending: true, purged: false })));
-  await saveMeta({ pinned: meta.pinned.filter((p) => p !== name) });
 }
 
 export async function setPackType(pack, type) {
@@ -163,6 +168,42 @@ export async function setPackType(pack, type) {
 
 export async function setCategoryKind(pack, category, kind) {
   await saveRecords(liveAssets().filter((a) => a.pack === pack && groupOf(a) === category && a.kind !== kind).map((a) => ({ ...a, kind })));
+}
+
+// --- reorganising ------------------------------------------------------
+
+// Move pictures to a pack, category and stamp (stamp '' leaves each one a
+// stamp of its own). They take on the category's stamps/textures setting if
+// it's already there, and the pack's map type.
+export async function moveAssets(ids, { pack, category, stamp = '' }) {
+  const target = packs().find((p) => p.name === pack);
+  const kind = target?.categories.find((c) => c.name === category)?.kind;
+  const path = stamp ? `${category}/${stamp}` : category;
+  const recs = ids.map((id) => assets.get(id)).filter((a) => a && !a.deleted).map((a) => ({
+    ...a, pack, category: path,
+    ...(kind ? { kind } : {}),
+    ...(target && target.name !== a.pack ? (target.type !== 'any' ? { mapType: target.type } : { mapType: null }) : {}),
+  }));
+  await saveRecords(recs);
+  return recs.length;
+}
+
+// Rename a category (or merge it into another, if that name is taken).
+export async function renameCategory(pack, from, to) {
+  await saveRecords(liveAssets().filter((a) => a.pack === pack && groupOf(a) === from)
+    .map((a) => ({ ...a, category: to + a.category.slice(from.length) })));
+}
+
+// Rename a stamp: its pictures become (or stay) a folder of variations.
+export async function renameStamp(ids, to) {
+  await saveRecords(ids.map((id) => assets.get(id)).filter((a) => a && !a.deleted)
+    .map((a) => ({ ...a, category: `${groupOf(a)}/${to}` })));
+}
+
+// The size (longer side, map pixels) a stamp starts at when picked, or null.
+export async function setDefaultSize(ids, size) {
+  await saveRecords(ids.map((id) => assets.get(id)).filter((a) => a && !a.deleted)
+    .map((a) => ({ ...a, defaultSize: size ? Math.round(size) : null })));
 }
 
 export async function setPinned(pack, on) {

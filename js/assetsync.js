@@ -133,7 +133,7 @@ export async function markAllUnsent() {
 }
 
 // Deleted assets: the device that deleted them removes their files from
-// OneDrive (deletePack marks them pending); a 404 just means they were
+// OneDrive (deleteAssets marks them pending); a 404 just means they were
 // already gone. Other devices only note that the deletion has been seen,
 // without a request each, so a device that merely hears about a deletion
 // can't remove files that were put back since.

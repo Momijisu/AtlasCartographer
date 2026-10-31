@@ -159,25 +159,40 @@ export async function viewPack(view, name) {
   setTitle(name);
   const byCat = new Map(p.categories.map((c) => [c.name, []]));
   for (const a of A.liveAssets()) if (a.pack === name) byCat.get(A.groupOf(a)).push(a);
-  const open = p.count <= 400;
+  // Categories stay open (and the page where it was) when it's redrawn after a change.
+  const opened = openCats.get(name) || new Set(p.count <= 400 ? p.categories.map((c) => c.name) : []);
+  openCats.set(name, opened);
+  const scrollY = reorganised === name ? window.scrollY : 0;
+  reorganised = null;
+  const sel = new Set(); // selected stamps (keys)
+  const sets = new Map(); // stamp key → { name, items, cat }
+  let selecting = false;
   view.innerHTML = `
     <div class="page-head"><div><div class="eyebrow"><a href="#/library">Art library</a></div><h1>${esc(name)}</h1>
       <div class="muted small">${num(p.count)} images · ${fmtBytes(p.bytes)}</div></div>
       <label class="inline pack-type">Made for <select id="packType">${A.PACK_TYPES.map(([v, n]) => `<option value="${v}" ${p.type === v ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
       <div class="actions">
+        <button class="btn" id="selectMode" title="Pick several stamps to move or size together (or Ctrl-click them)">Select</button>
         <label class="check"><input type="checkbox" id="pinPack" ${meta.pinned.includes(name) ? 'checked' : ''}> Keep offline</label>
         <button class="btn" id="exportPack" title="Save the whole pack as one ${EXTENSION} file">${icon('download-simple')} Export pack file</button>
         <button class="btn danger" id="delPack">${icon('trash')} Delete pack</button>
       </div></div>
     <div id="exportStatus"></div>
     <div id="transferStatus"></div>
-    ${p.categories.map((c) => `<details class="cat" ${open ? 'open' : ''} data-cat="${esc(c.name)}">
-      <summary><span class="cat-name">${icon('caret-right', 'caret')} ${esc(catLabel(c.name))}</span> <span class="muted small">${num(c.count)}</span>
+    <p class="muted small">Click a stamp to see its variations, rename or move it, or give it a default size. Ctrl or Shift-click (or Select) to pick several.</p>
+    ${p.categories.map((c) => `<details class="cat" ${opened.has(c.name) ? 'open' : ''} data-cat="${esc(c.name)}">
+      <summary><span class="cat-name">${icon('caret-right', 'caret')} ${esc(catLabel(c.name))}</span> <span class="muted small">${num(A.categorySets(name, c.name).length)} stamps · ${num(c.count)} images</span>
+        <button type="button" class="icon-btn small" data-rename-cat="${esc(c.name)}" title="Rename this category (or merge it into another)" aria-label="Rename category">${icon('pencil-simple')}</button>
         <span class="seg small kind-seg" data-cat="${esc(c.name)}">
           <button type="button" data-kind="stamp" class="${c.kind === 'stamp' ? 'on' : ''}" title="Placed one at a time">Stamps</button>
           <button type="button" data-kind="texture" class="${c.kind === 'texture' ? 'on' : ''}" title="Painted as a repeating fill">Textures</button>
         </span></summary>
-      <div class="asset-grid"></div></details>`).join('')}`;
+      <div class="asset-grid"></div></details>`).join('')}
+    <div class="sel-bar" hidden><span class="sel-count"></span>
+      <button class="btn small" data-sel="move">Move to…</button>
+      <button class="btn small" data-sel="size">Default size…</button>
+      <button class="btn small danger" data-sel="delete">${icon('trash')} Delete</button>
+      <button class="btn small quiet" data-sel="clear">Clear</button></div>`;
 
   const io = new IntersectionObserver((list) => {
     for (const en of list) if (en.isIntersecting) { io.unobserve(en.target); hydrate(en.target); }
@@ -187,18 +202,91 @@ export async function viewPack(view, name) {
     if (url) tile.innerHTML = `<img src="${url}" alt="" draggable="false">`;
     else tile.classList.add('missing');
   };
+  // One tile per stamp: its first picture, a count of its variations, and
+  // its default size if it has one.
   const fill = (d) => {
     const grid = $('.asset-grid', d);
     if (grid.childElementCount) return;
-    // Stamp by stamp, each one's variations together.
-    grid.innerHTML = A.categorySets(name, d.dataset.cat)
-      .map((st) => st.items.map((a) => `<div class="tile" data-id="${a.id}" title="${esc(st.items.length > 1 ? `${st.name}: ${a.name}` : a.name)} · ${a.w}×${a.h}">${icon('image')}</div>`).join('')).join('');
-    for (const t of grid.children) io.observe(t);
+    grid.innerHTML = A.categorySets(name, d.dataset.cat).map((st) => {
+      sets.set(st.key, { ...st, cat: d.dataset.cat });
+      const a = st.items[0], size = a.defaultSize;
+      return `<div class="lib-stamp${sel.has(st.key) ? ' sel' : ''}" data-set="${esc(st.key)}" title="${esc(st.name)}${st.items.length > 1 ? ` · ${st.items.length} variations` : ''}${size ? ` · starts at ${size} px` : ''}">
+        <div class="tile" data-id="${a.id}">${icon('image')}</div>
+        ${st.items.length > 1 ? `<span class="pk-badge static">${st.items.length}</span>` : ''}${size ? `<span class="size-tag">${size}</span>` : ''}
+        <span class="lib-stamp-name">${esc(st.name)}</span></div>`;
+    }).join('');
+    for (const t of $$('.tile', grid)) io.observe(t);
   };
   for (const d of $$('details.cat', view)) {
     if (d.open) fill(d);
-    d.addEventListener('toggle', () => { if (d.open) fill(d); });
+    d.addEventListener('toggle', () => {
+      if (d.open) { opened.add(d.dataset.cat); fill(d); } else opened.delete(d.dataset.cat);
+    });
   }
+  if (scrollY) requestAnimationFrame(() => window.scrollTo(0, scrollY));
+  const syncSel = () => {
+    const bar = $('.sel-bar', view);
+    bar.hidden = !sel.size;
+    const n = [...sel].reduce((k, key) => k + (sets.get(key)?.items.length || 0), 0);
+    $('.sel-count', bar).textContent = `${num(sel.size)} ${sel.size === 1 ? 'stamp' : 'stamps'} (${num(n)} images)`;
+    for (const el of $$('.lib-stamp', view)) el.classList.toggle('sel', sel.has(el.dataset.set));
+    $('#selectMode').classList.toggle('on', selecting);
+  };
+  const selIds = () => [...sel].flatMap((k) => sets.get(k)?.items.map((a) => a.id) || []);
+  // Redraw after a change, where you were.
+  const redraw = () => { reorganised = name; if (!A.packs().some((x) => x.name === name)) location.hash = '#/library'; else state.route(); };
+  // (A property, not a listener: the view element outlives this page.)
+  view.onclick = async (e) => {
+    const ren = e.target.closest('[data-rename-cat]');
+    if (ren) {
+      e.preventDefault(); // inside <summary>: don't fold it
+      const from = ren.dataset.renameCat;
+      const to = (await askText('Rename category', from, 'Name'))?.replace(/\//g, '-');
+      if (!to || to === from) return;
+      const merging = A.packs().find((x) => x.name === name)?.categories.some((c) => c.name === to);
+      if (merging && !(await confirmDialog(`“${to}” already exists. Move everything in “${catLabel(from)}” into it?`, 'Merge'))) return;
+      opened.delete(from); opened.add(to);
+      await A.renameCategory(name, from, to);
+      redraw();
+      return;
+    }
+    const st = e.target.closest('.lib-stamp');
+    if (st) {
+      if (selecting || e.ctrlKey || e.metaKey || e.shiftKey) {
+        if (sel.has(st.dataset.set)) sel.delete(st.dataset.set); else sel.add(st.dataset.set);
+        syncSel();
+      } else if (await stampDialog(name, sets.get(st.dataset.set))) redraw();
+      return;
+    }
+    const b = e.target.closest('[data-sel]');
+    if (!b) return;
+    const act = b.dataset.sel;
+    if (act === 'clear') { sel.clear(); selecting = false; syncSel(); return; }
+    if (act === 'move') {
+      const to = await moveDialog(name, `Move ${sel.size} ${sel.size === 1 ? 'stamp' : 'stamps'}`, '', true);
+      if (!to) return;
+      // Without a stamp name, each keeps its own; with one, they become variations of one stamp.
+      for (const key of sel) {
+        const s1 = sets.get(key);
+        await A.moveAssets(s1.items.map((a) => a.id), { pack: to.pack, category: to.category, stamp: to.stamp || (s1.items[0].category.includes('/') ? s1.name : '') });
+      }
+      toast(`Moved to ${to.pack === name ? '' : `${to.pack} · `}${to.category || 'General'}`);
+      sel.clear();
+      redraw();
+    } else if (act === 'size') {
+      const size = await sizeDialog(sets.get([...sel][0])?.items[0]?.defaultSize);
+      if (size === undefined) return;
+      await A.setDefaultSize(selIds(), size);
+      redraw();
+    } else if (act === 'delete') {
+      const ids = selIds();
+      if (!(await confirmDialog(`Delete these ${num(ids.length)} images from all your devices and OneDrive? Maps that use them will show gaps.`, 'Delete'))) return;
+      await A.deleteAssets(ids);
+      sel.clear();
+      redraw();
+    }
+  };
+  $('#selectMode').onclick = () => { selecting = !selecting; if (!selecting) sel.clear(); syncSel(); };
   for (const seg of $$('.kind-seg', view)) {
     seg.onclick = async (e) => {
       e.preventDefault(); // inside <summary>: don't fold the category
@@ -229,7 +317,7 @@ export async function viewPack(view, name) {
   // Thumbnails arriving from OneDrive fill in tiles that were waiting for them.
   watchTransfers(() => { for (const t of $$('.tile.missing', view)) { t.classList.remove('missing'); hydrate(t); } });
   const stop = state.cleanup;
-  state.cleanup = () => { stop?.(); io.disconnect(); };
+  state.cleanup = () => { stop?.(); io.disconnect(); view.onclick = null; };
 }
 
 // --- exporting ----------------------------------------------------------
@@ -293,4 +381,112 @@ async function saveDialog({ blob, fileName, count, missing }) {
       };
     },
   });
+}
+
+// --- reorganising ---------------------------------------------------------
+
+const openCats = new Map(); // pack → the categories open on its page
+let reorganised = null; // the pack whose page is being redrawn after a change
+
+function askText(title, value, label) {
+  return modal(title, `<form class="form"><label>${esc(label)}<input name="v" required maxlength="80" value="${esc(value)}"></label>
+    <div class="actions"><button type="button" class="btn quiet" data-cancel>Cancel</button><button class="btn primary">Save</button></div></form>`, {
+    onMount: (m, close) => {
+      $('[data-cancel]', m).onclick = () => close(null);
+      $('form', m).onsubmit = (e) => { e.preventDefault(); close(e.target.v.value.trim() || null); };
+      $('input', m).select();
+    },
+  });
+}
+
+// Where to move things: a pack, a category in it (new or existing), and
+// optionally a stamp. Resolves { pack, category, stamp } or null.
+function moveDialog(pack, title, stamp = '', several = false, category = '') {
+  const ps = A.packs();
+  const cats = (pk) => (ps.find((x) => x.name === pk)?.categories || []).map((c) => c.name);
+  return modal(title, `<form class="form">
+      <label>Pack<input name="pack" list="mvPacks" required maxlength="80" value="${esc(pack)}"></label>
+      <datalist id="mvPacks">${ps.map((x) => `<option value="${esc(x.name)}">`).join('')}</datalist>
+      <label>Category<input name="category" list="mvCats" maxlength="80" value="${esc(category)}" placeholder="General"></label>
+      <datalist id="mvCats">${cats(pack).map((c) => `<option value="${esc(c)}">`).join('')}</datalist>
+      <label>Stamp <small>${several ? 'empty: each keeps its own name; a name: they become variations of one stamp' : 'the stamp they’re variations of'}</small><input name="stamp" maxlength="80" value="${esc(stamp)}"></label>
+      <p class="muted small">A new pack or category is made if the name isn’t taken.</p>
+      <div class="actions"><button type="button" class="btn quiet" data-cancel>Cancel</button><button class="btn primary">Move</button></div>
+    </form>`, {
+    onMount: (m, close) => {
+      const f = $('form', m);
+      f.pack.oninput = () => { $('#mvCats', m).innerHTML = cats(f.pack.value.trim()).map((c) => `<option value="${esc(c)}">`).join(''); };
+      $('[data-cancel]', m).onclick = () => close(null);
+      f.onsubmit = (e) => {
+        e.preventDefault();
+        const clean = (v) => v.trim().replace(/\//g, '-');
+        close({ pack: f.pack.value.trim(), category: clean(f.category.value), stamp: clean(f.stamp.value) });
+      };
+    },
+  });
+}
+
+// A default size: a number, null to clear it, undefined if cancelled.
+function sizeDialog(value) {
+  return modal('Default size', `<form class="form">
+      <label>Size <small>map pixels, the longer side</small><input name="size" type="number" min="8" max="4096" step="1" value="${value || ''}" placeholder="None: use the size slider"></label>
+      <p class="muted small">Picking the stamp in the editor sets the size slider to this. You can also set it there: size a stamp, then “Save as its default size”.</p>
+      <div class="actions"><button type="button" class="btn quiet" data-clear>No default</button><span class="spacer"></span><button type="button" class="btn quiet" data-cancel>Cancel</button><button class="btn primary">Save</button></div>
+    </form>`, {
+    onMount: (m, close) => {
+      $('[data-cancel]', m).onclick = () => close(undefined);
+      $('[data-clear]', m).onclick = () => close(null);
+      $('form', m).onsubmit = (e) => { e.preventDefault(); const v = +e.target.size.value; close(v >= 8 ? v : null); };
+    },
+  }).then((v) => v);
+}
+
+// One stamp: its variations (select some to act on just those), its name,
+// where it lives, and its default size. Resolves true if anything changed.
+async function stampDialog(pack, st) {
+  if (!st) return false;
+  const chosen = new Set();
+  const res = await modal(st.name, `<div class="form">
+      <div class="asset-grid stamp-vars">${st.items.map((a) => `<div class="tile" data-id="${a.id}" title="${esc(a.name)} · ${a.w}×${a.h}">${icon('image')}</div>`).join('')}</div>
+      <p class="muted small sv-note">${st.items.length > 1 ? `${st.items.length} variations. Tap some to act on just those.` : 'One picture.'}</p>
+      <label>Name<input name="name" maxlength="80" value="${esc(st.name)}"></label>
+      <label>Default size <small>map pixels, the longer side</small><input name="size" type="number" min="8" max="4096" step="1" value="${st.items[0].defaultSize || ''}" placeholder="None: use the size slider"></label>
+      <div class="actions left"><button type="button" class="btn small" data-a="move">Move…</button><button type="button" class="btn small danger" data-a="delete">${icon('trash')} Delete</button></div>
+      <div class="actions"><button type="button" class="btn quiet" data-cancel>Cancel</button><button type="button" class="btn primary" data-a="save">Save</button></div>
+    </div>`, {
+    wide: true,
+    onMount: (m, close) => {
+      for (const t of $$('.tile', m)) A.thumbURL(t.dataset.id).then((url) => { if (url) t.innerHTML = `<img src="${url}" alt="" draggable="false">`; });
+      $('.stamp-vars', m).onclick = (e) => {
+        const t = e.target.closest('.tile');
+        if (!t || st.items.length < 2) return;
+        if (chosen.has(t.dataset.id)) chosen.delete(t.dataset.id); else chosen.add(t.dataset.id);
+        t.classList.toggle('on', chosen.has(t.dataset.id));
+        $('.sv-note', m).textContent = chosen.size ? `${chosen.size} of ${st.items.length} selected: Move or Delete acts on just these.` : `${st.items.length} variations. Tap some to act on just those.`;
+      };
+      $('[data-cancel]', m).onclick = () => close(null);
+      m.addEventListener('click', (e) => {
+        const b = e.target.closest('[data-a]');
+        if (b) close({ a: b.dataset.a, name: $('[name=name]', m).value.trim().replace(/\//g, '-'), size: +$('[name=size]', m).value || null });
+      });
+    },
+  });
+  if (!res) return false;
+  const all = st.items.map((a) => a.id), ids = chosen.size ? [...chosen] : all;
+  if (res.a === 'delete') {
+    if (!(await confirmDialog(`Delete ${ids.length === 1 ? 'this image' : `these ${ids.length} images`} from all your devices and OneDrive? Maps that use ${ids.length === 1 ? 'it' : 'them'} will show gaps.`, 'Delete'))) return false;
+    await A.deleteAssets(ids);
+    return true;
+  }
+  if (res.a === 'move') {
+    const to = await moveDialog(pack, chosen.size ? `Move ${chosen.size} variations` : `Move “${st.name}”`, chosen.size ? '' : res.name || st.name, false, st.cat);
+    if (!to) return false;
+    await A.moveAssets(ids, to);
+    toast(`Moved to ${to.pack === pack ? '' : `${to.pack} · `}${to.category || 'General'}${to.stamp ? ` · ${to.stamp}` : ''}`);
+    return true;
+  }
+  let changed = false;
+  if (res.name && res.name !== st.name) { await A.renameStamp(all, res.name); changed = true; }
+  if ((res.size || null) !== (st.items[0].defaultSize || null)) { await A.setDefaultSize(all, res.size); changed = true; }
+  return changed;
 }

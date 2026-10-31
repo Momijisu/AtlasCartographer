@@ -118,6 +118,7 @@ export async function viewEditor(view, id) {
         <span class="tb-group" data-for="stamp scatter">
           <span class="seg place-mode" title="Place one stamp per click, or paint many"><button type="button" data-place="stamp">One</button><button type="button" data-place="scatter">Many</button></span>
           <button class="brush-chip" data-act="picker" title="Choose art (F) · Alt ← → for the next variation" aria-label="Choose art"></button>
+          <button class="tool" data-act="stamp-default" title="Save this size as the chosen stamp’s default: it starts at this size whenever it’s picked" aria-label="Save as the stamp’s default size">${icon('push-pin')}</button>
           <button class="tool" data-act="stamp-random" title="Random variation: each stamp placed is one of its variations, at random" aria-label="Random variation" aria-pressed="false">${icon('dice')}</button>
           ${opt('Size', 'stampSize', '<input type="range" class="stamp-size" min="0" max="100" step="1" title="Stamp size (W and S)" aria-label="Stamp size">')}
           ${opt('Opacity', 'stampOpacity', '<input type="range" class="stamp-opacity" min="5" max="100" step="5" title="Opacity of new stamps (E and D)" aria-label="Stamp opacity">')}
@@ -866,12 +867,14 @@ class Editor {
   // --- toolbar and picker -------------------------------------------------
 
   setTool(t) {
+    const prev = this.tool;
     if (t !== this.tool) this.prevTool = this.tool;
     this.tool = t;
     this.poly = null;
     keep('ac.tool', t);
     if (t !== 'select') this.clearSel();
-    if ((t === 'stamp' || t === 'scatter') && !this.brush.length) this.openPicker();
+    // The stamp tool keeps its picker open (it's closed with its X, or F).
+    if ((t === 'stamp' || t === 'scatter') && (prev !== 'stamp' && prev !== 'scatter' || !this.brush.length)) this.openPicker();
     this.syncToolbar();
     this.redrawOverlay();
   }
@@ -957,6 +960,16 @@ class Editor {
     if (!el.hidden) $('.hint-text', el).textContent = matchMedia('(pointer: coarse)').matches
       ? 'Start with Land to paint the coast, or Stamp to place art'
       : 'Start with Land (M) to paint the coast, or Stamp (O) to place art · ? for shortcuts';
+  }
+
+  // The current size becomes the default of the chosen stamps (all their variations).
+  async saveDefaultSize() {
+    const chosen = this.brush.map((id) => A.asset(id)).filter(Boolean);
+    if (!chosen.length) { toast('Choose a stamp first'); return; }
+    const ids = [...new Set(chosen.flatMap((a) => A.variationsOf(a).map((v) => v.id)))];
+    await A.setDefaultSize(ids, this.stampSize);
+    const names = [...new Set(chosen.map((a) => A.variationsOf(a)[0]))].length;
+    toast(`${names === 1 ? `“${A.variationsOf(chosen[0]).length > 1 ? A.setOf(chosen[0]) : chosen[0].name}”` : `${names} stamps`} will start at ${this.stampSize} px`, 2200);
   }
 
   // Random on: the chosen stamps' variations all go into the brush; off: just
@@ -1403,8 +1416,9 @@ class Editor {
             const isOpen = open.has(key);
             // Closed, a category shows a strip of its first stamps.
             body += `<section class="pk-section">${catHead(key, c.name || 'General', sets.length, isOpen)}
-              ${isOpen ? setGrid(sets, key) : `<div class="pk-strip">${sets.slice(0, 6).map((st) => `<span class="pk-set">${tile(st.items[0], ' mini', st)}${st.items.length > 1 ? `<span class="pk-badge static">${st.items.length}</span>` : ''}</span>`).join('')}${sets.length > 6 ? `<button class="pk-more" data-toggle="${esc(key)}">+${sets.length - 6}</button>` : ''}</div>`}</section>`;
-            for (const st of sets.slice(0, 6)) this.pickSets.set(st.key, st.items.map((a) => a.id));
+              ${isOpen ? setGrid(sets, key) + (sets.length > 5 ? `<div class="pk-actions"><button class="btn small quiet" data-toggle="${esc(key)}">Show less</button></div>` : '')
+                : `<div class="pk-strip">${sets.slice(0, 5).map((st) => `<span class="pk-set">${tile(st.items[0], ' mini', st)}${st.items.length > 1 ? `<button class="pk-badge" data-expand="${esc(st.key)}" data-opencat="${esc(key)}" title="Show the ${st.items.length} variations" aria-label="Show the ${st.items.length} variations">${st.items.length}</button>` : ''}</span>`).join('')}${sets.length > 5 ? `<button class="pk-more" data-toggle="${esc(key)}" title="Show all ${sets.length}">+${sets.length - 5}</button>` : ''}</div>`}</section>`;
+            for (const st of sets.slice(0, 5)) this.pickSets.set(st.key, st.items.map((a) => a.id));
           }
         }
         body += '</section>';
@@ -1478,7 +1492,13 @@ class Editor {
       const expand = e.target.closest('[data-expand]');
       if (expand) {
         const k = expand.dataset.expand;
-        if (this.pickSetOpen.has(k)) this.pickSetOpen.delete(k); else this.pickSetOpen.add(k);
+        // From a closed category's strip: open the category, with this stamp's variations showing.
+        if (expand.dataset.opencat) {
+          const open = this.pickOpen(kind);
+          open.add(expand.dataset.opencat);
+          keep(`ac.pickOpen.${kind}`, [...open]);
+          this.pickSetOpen.add(k);
+        } else if (this.pickSetOpen.has(k)) this.pickSetOpen.delete(k); else this.pickSetOpen.add(k);
         this.renderPicker();
         return;
       }
@@ -1494,8 +1514,6 @@ class Editor {
         if (add) this.setBrush(ids.every((x) => this.brush.includes(x)) ? this.brush.filter((x) => !ids.includes(x)) : [...new Set([...this.brush, ...ids])]);
         else this.setBrush(ids);
         if (this.tool !== 'stamp' && this.tool !== 'scatter') this.setTool('stamp');
-        // On small screens the picker covers the map: close it after a single pick.
-        if (!add && matchMedia('(max-width: 600px)').matches) el.hidden = true;
         return;
       }
       const head = e.target.closest('[data-toggle]');
@@ -1529,6 +1547,9 @@ class Editor {
   setBrush(ids) {
     this.brush = ids;
     keep('ac.brush', ids);
+    // A stamp with a default size starts at it.
+    const size = A.asset(ids[0])?.defaultSize;
+    if (size && size !== this.stampSize) { this.stampSize = size; keep('ac.stampSize', size); this.flashSize(); }
     this.markPicker();
     this.syncToolbar();
   }
@@ -1651,6 +1672,7 @@ class Editor {
       else if (act === 'stamp-turn') this.turnStamp(e.shiftKey ? 45 : 15);
       else if (act === 'stamp-flip') this.flipStamp();
       else if (act === 'stamp-random') this.setStampRandom(!this.stampRandom);
+      else if (act === 'stamp-default') this.saveDefaultSize();
       else if (act === 'picker') this.togglePicker('stamp');
       else if (act === 'textures') this.togglePicker('texture');
       else if (act === 'flip') this.flipSelected();
@@ -1729,17 +1751,25 @@ class Editor {
       // Wheel with keys held, a step per notch (trackpads send many small
       // ones, so they're added up): Shift sizes the brush or the selection;
       // Alt the brush, or with the stamp tool picks the next in its set;
-      // Ctrl turns the selection (Ctrl Alt, finely). A trackpad pinch also
-      // arrives as Ctrl + wheel, in small fractional steps: that still zooms.
+      // R held, or Ctrl, turns the next stamp or the selection (with Alt,
+      // finely). A trackpad pinch also arrives as Ctrl + wheel, in small
+      // fractional steps: that still zooms.
       const any = this.tool === 'select' && this.selectedObjs().length > 0;
-      const d = e.deltaY || e.deltaX; // Shift turns the wheel sideways in some browsers
-      const mouseCtrl = (e.ctrlKey || e.metaKey) && any && e.deltaMode === 0 && Math.abs(e.deltaY) >= 40 && Number.isInteger(e.deltaY);
-      if ((e.shiftKey || e.altKey || mouseCtrl) && !this.readOnly) {
+      const turnable = any || this.tool === 'stamp';
+      // Shift turns the wheel sideways in some browsers; Firefox counts lines.
+      const d = (e.deltaY || e.deltaX) * (e.deltaMode === 1 ? 40 : e.deltaMode === 2 ? 400 : 1);
+      const mouseWheel = e.deltaMode !== 0 || (Math.abs(e.deltaY) >= 40 && Number.isInteger(e.deltaY));
+      const turn = turnable && (this.rHeld || ((e.ctrlKey || e.metaKey) && mouseWheel));
+      if ((e.shiftKey || e.altKey || turn) && !this.readOnly) {
         this.wheelStep = (this.wheelStep || 0) + d;
         if (Math.abs(this.wheelStep) < 50) return;
         const up = this.wheelStep < 0;
         this.wheelStep = 0;
-        if (mouseCtrl) this.rotateSelected((up ? -1 : 1) * (e.altKey ? 1 : 15));
+        if (turn) {
+          if (this.rHeld) this.rUsed = true;
+          const deg = (up ? -1 : 1) * (e.altKey ? (any ? 1 : 5) : 15);
+          if (any) this.rotateSelected(deg); else this.turnStamp(deg);
+        }
         else if (e.altKey && (this.tool === 'stamp' || this.tool === 'scatter')) this.stepSet(up ? -1 : 1);
         else if (any) this.scaleSelected(up ? 1.05 : 1 / 1.05);
         else this.resizeBrush(up);
@@ -1749,7 +1779,12 @@ class Editor {
       else { this.x -= e.deltaX; this.y -= e.deltaY; this.redraw(); }
     }, { passive: false });
     this.on(document, 'keydown', (e) => this.key(e));
-    this.on(document, 'keyup', (e) => { if (e.key === ' ') { this.spaceDown = false; this.syncToolbar(); } });
+    this.on(document, 'keyup', (e) => {
+      if (e.key === ' ') { this.spaceDown = false; this.syncToolbar(); }
+      // R let go without turning anything with the wheel: it was a tap, for the shape tool.
+      if (e.code === 'KeyR' && this.rHeld) { this.rHeld = false; if (!this.rUsed) this.setTool('shape'); }
+    });
+    this.on(window, 'blur', () => { this.rHeld = false; });
   }
 
   key(e) {
@@ -1824,12 +1859,24 @@ class Editor {
     }
     // Escape first drops whatever is half done (a stroke, a box, a move).
     if (e.key === 'Escape' && this.gesture && this.gesture.kind !== 'pinch') { this.restore(this.gesture); this.gesture = null; this.pointers.clear(); this.syncToolbar(); this.redraw(); return; }
-    if (e.key === 'Escape') { this.clearSel(); this.closePanels(); this.syncToolbar(); this.redrawOverlay(); return; }
+    // (The stamp picker stays open while stamping: its X closes it.)
+    if (e.key === 'Escape') {
+      const keepPicker = (this.tool === 'stamp' || this.tool === 'scatter') && this.pickerMode === 'stamp' && !$('.picker', this.root).hidden;
+      this.clearSel(); this.closePanels();
+      if (keepPicker) $('.picker', this.root).hidden = false;
+      this.syncToolbar(); this.redrawOverlay(); return;
+    }
     if (this.toolKey(e, letter, big, any)) { e.preventDefault(); return; }
     // Number keys: opacity, or strength (10–90%, and 0 for 100%), by key position.
     const digit = /^Digit(\d)$/.exec(code)?.[1];
     if (digit != null && !e.shiftKey && !e.altKey && this.brushSetting('opacity', null, digit === '0' ? 1 : +digit / 10)) { e.preventDefault(); return; }
     if (letter === 'g' && !e.altKey) { this.toggleSnap(); return; }
+    // R, while stamping or with stamps selected, waits to see whether the
+    // wheel turns with it (to turn them) before it picks the shape tool.
+    if (letter === 'r' && !e.altKey && !e.shiftKey && (this.tool === 'stamp' || (this.tool === 'select' && any))) {
+      if (!e.repeat) { this.rHeld = true; this.rUsed = false; }
+      return;
+    }
     if (letter && KEYS[letter] && !e.altKey && !e.shiftKey) {
       this.setTool(letter === 'o' ? load('ac.stampPlace', 'stamp') : KEYS[letter]);
       return;
@@ -2627,13 +2674,13 @@ export const SHORTCUTS = [
   ['Select', [['Ctrl A', 'Select all'], ['` or ~', 'Bring back the last selection'], ['Esc', 'Deselect (or cancel what’s half done)'],
     ['Del or Backspace', 'Delete'], ['Ctrl C / X / V, Ctrl D', 'Copy, cut, paste, duplicate'], ['Ctrl G / Ctrl Shift G', 'Group / ungroup'],
     ['Ctrl L / Ctrl Shift L', 'Lock / unlock everything'], ['Arrows', 'Move'], ['W / S, or Shift + wheel', 'Larger / smaller'],
-    ['> / <, or Ctrl + wheel', 'Turn (Ctrl Alt + wheel: finely)'], ['Ctrl ↑ ↓', 'Forward / backward'], ['[  ]', 'To the back / front'],
+    ['> / <, or hold R (or Ctrl) and scroll', 'Turn (with Alt, finely)'], ['Ctrl ↑ ↓', 'Forward / backward'], ['[  ]', 'To the back / front'],
     ['Ctrl Shift ↑ ↓', 'Move to the layer above / below'], ['Shift, dragging the round handle', 'Turn in 15° steps'], ['F', 'Flip'],
     ['Ctrl or Shift click, or drag', 'Add to / take from the selection'], ['Enter, or double-click', 'Edit a label'], ['Alt-click a path point', 'Remove it']]],
   ['Land', [['X', 'Paint land / water'], ['Alt (hold)', 'The other one, for one stroke'], ['W / S, or Shift + wheel', 'Brush size']]],
   ['Brush', [['F', 'Texture catalogue'], ['W / S, or Shift + wheel', 'Size'], ['E / D', 'Strength'], ['Q / A', 'Softness']]],
   ['Stamp', [['F', 'Stamp catalogue'], ['W / S, or Shift + wheel', 'Size'], ['E / D', 'Opacity'], ['Q / A', 'Area (placing many)'], ['Alt Q / Alt A', 'Density (placing many)'],
-    ['Alt → ←, or Alt + wheel', 'Next / previous in the set'], ['> / <', 'Turn the next stamp'], ['Shift F', 'Flip the next stamp'],
+    ['Alt → ←, or Alt + wheel', 'Next / previous variation'], ['> / <, or hold R (or Ctrl) and scroll', 'Turn the next stamp (with Alt, finely)'], ['Shift F', 'Flip the next stamp'],
     ['Ctrl click a picture', 'Pick several to place at random']]],
   ['Shape', [['X', 'Add / cut out'], ['W / S', 'Outline width'], ['E / D', 'Opacity'], ['F', 'Fill texture'],
     ['Shift (dragging)', 'Square or circle'], ['Alt (dragging)', 'Draw from the middle'],
