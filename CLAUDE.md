@@ -81,6 +81,10 @@ the owner, not after.
   README's feature list, commit with a clear user-facing message.
 - Small fixes go straight to `main`. Larger or visual changes go to `preview`
   first; they reach `main` once the owner has tried them and said yes.
-- The preview keeps its own data on the device and its own folder in OneDrive
-  (`preview/` in the app folder), so trying it can't damage real maps.
+- The preview keeps its own data on the device and its maps in their own
+  OneDrive folder (`preview/` in the app folder), so trying it can't damage
+  real maps. It shares the art library (assets.json, assets/, thumbs/): a
+  change on the preview that rewrites or deletes art reaches the real app.
+- The preview's sign-in needs `https://momijisu.github.io/AtlasCartographer/preview/`
+  listed as an SPA redirect URI in the Azure app registration.
 - Never commit art. Test fixtures in `tests/pack*/` are generated shapes.

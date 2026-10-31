@@ -69,4 +69,4 @@ async function stroke(p, pts) {
   await p.mouse.up();
 }
 
-module.exports={device,drive,waitSynced,stroke,log,folders,BASE};
+module.exports={device,drive,waitSynced,stroke,log,folders,BASE,handle,tokens};

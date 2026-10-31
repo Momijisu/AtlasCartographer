@@ -14,12 +14,15 @@ import * as auth from './auth.js';
 import * as store from './store.js';
 import * as assets from './assets.js';
 import * as assetsync from './assetsync.js';
+import { PREVIEW } from './config.js';
 
 const APPROOT = '/me/drive/special/approot';
 const ROOT = `${APPROOT}:`; // + '/path/in/the/app/folder'
-const INDEX = 'projects.json';
+// The preview's maps live in a folder of their own; the art is shared.
+const MAPS = PREVIEW ? 'preview/' : '';
+const INDEX = `${MAPS}projects.json`;
 const CATALOGUE = 'assets.json';
-const docPath = (id) => `projects/${id}.json`;
+const docPath = (id) => `${MAPS}projects/${id}.json`;
 
 let status = { state: 'off', message: '' };
 const listeners = new Set();
@@ -229,12 +232,12 @@ async function syncDoc(id, remoteETag) {
 // name → eTag of every drawing in projects/, following OneDrive's paging.
 async function listDocs() {
   const out = new Map();
-  let url = `${ROOT}/projects:/children?$select=name,eTag&$top=200`;
+  let url = `${ROOT}/${MAPS}projects:/children?$select=name,eTag&$top=200`;
   while (url) {
     const res = await graph(url);
     if (res.status === 404) break;
     const json = await (await check(res, 'Listing projects')).json();
-    for (const it of json.value) out.set(`projects/${it.name}`, it.eTag);
+    for (const it of json.value) out.set(`${MAPS}projects/${it.name}`, it.eTag);
     url = json['@odata.nextLink'] || null;
   }
   return out;

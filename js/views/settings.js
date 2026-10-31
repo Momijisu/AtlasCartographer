@@ -6,6 +6,7 @@ import { $, esc, toast, timeAgo, confirmDialog } from '../util.js';
 import { icon } from '../icons.js';
 import { setTitle, state } from '../ui.js';
 import { landDetail } from '../render.js';
+import { ownCache, CACHE_PREFIX } from '../config.js';
 
 export function applyTheme() {
   document.documentElement.dataset.theme = localStorage.getItem('ac.theme') || 'dark';
@@ -95,8 +96,8 @@ function wireAbout() {
   const cacheEl = $('#cacheVer');
   const showCache = async (retry) => {
     try {
-      const keys = (await caches.keys()).filter((k) => k.startsWith('cartographer-'));
-      const cached = keys.map((k) => k.slice('cartographer-'.length));
+      const keys = (await caches.keys()).filter(ownCache);
+      const cached = keys.map((k) => k.slice(CACHE_PREFIX.length));
       cacheEl.textContent = !keys.length ? 'downloading for offline use…'
         : cached.includes(running) ? `${running} · matches` : `${cached.join(', ')} · updating to ${running}…`;
       // On a first visit the cache is still being filled; look again once it's ready.
@@ -132,7 +133,7 @@ function wireAbout() {
   $('#resetCache').onclick = async () => {
     if (!(await confirmDialog('Clear the app’s downloaded files and reload? Your maps, art and settings stay.', 'Reset and reload', { title: 'Reset offline cache', danger: false }))) return;
     try {
-      for (const k of await caches.keys()) if (k.startsWith('cartographer-')) await caches.delete(k);
+      for (const k of await caches.keys()) if (ownCache(k)) await caches.delete(k);
       for (const r of (await navigator.serviceWorker?.getRegistrations()) || []) if (r.scope === new URL('./', location.href).href) await r.unregister();
     } catch { /* ignore */ }
     location.reload();

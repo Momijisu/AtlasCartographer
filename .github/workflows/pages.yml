@@ -1,5 +1,8 @@
 name: Deploy to GitHub Pages
 
+# The site is main at the root and the preview branch under /preview/, built
+# together. Only main may deploy Pages, so a push to preview asks this
+# workflow to run on main (preview.yml), which picks the preview up.
 on:
   push:
     branches: [main]
@@ -22,9 +25,25 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/configure-pages@v5
+      - name: Assemble the site
+        run: |
+          mkdir _site
+          git archive HEAD | tar -x -C _site
+          if git rev-parse --verify -q origin/preview >/dev/null; then
+            mkdir _site/preview
+            git archive origin/preview | tar -x -C _site/preview
+            # The preview installs as an app of its own.
+            sed -i -e 's/"id": "atlascartographer"/"id": "atlascartographer-preview"/' \
+                   -e 's/"name": "AtlasCartographer"/"name": "AtlasCartographer preview"/' \
+                   -e 's/"short_name": "Cartographer"/"short_name": "Preview"/' _site/preview/manifest.webmanifest
+          fi
+          # Not part of the app.
+          rm -rf _site/.github _site/tests _site/CLAUDE.md _site/preview/.github _site/preview/tests _site/preview/CLAUDE.md
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: .
+          path: _site
       - id: deployment
         uses: actions/deploy-pages@v4

@@ -16,9 +16,12 @@ import * as assetsync from './assetsync.js';
 import * as images from './images.js';
 import { viewSettings, renderOneDriveCard, applyTheme } from './views/settings.js';
 import { state, isBusy } from './ui.js';
+import { PREVIEW } from './config.js';
 
 async function boot() {
   applyTheme();
+  // The preview says so, so it's never mistaken for the real app.
+  if (PREVIEW) $('.brand span').insertAdjacentHTML('beforeend', ' <em class="preview-tag" title="Trying out changes: maps here are kept apart from your real ones">Preview</em>');
   let authError = null, returned = null;
   try { returned = await auth.handleRedirect(); } catch (e) { authError = e; }
   await store.load();

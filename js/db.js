@@ -6,7 +6,9 @@
 // assets:   the art catalogue (synced): one record per file, keyed by its hash.
 // blobs:    full-size art on this device; thumbs: small previews of it.
 // assetState: what this device has uploaded or cleaned up (never synced).
-const DB_NAME = 'atlascartographer';
+import { PREVIEW } from './config.js';
+
+const DB_NAME = PREVIEW ? 'atlascartographer-preview' : 'atlascartographer';
 const DB_VERSION = 2;
 
 let dbp;

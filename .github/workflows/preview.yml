@@ -1,0 +1,18 @@
+name: Publish the preview
+
+# Pages can only be deployed from main, so this asks the Pages workflow to
+# run on main; it builds the preview branch into /preview/ alongside.
+on:
+  push:
+    branches: [preview]
+
+permissions:
+  actions: write
+
+jobs:
+  redeploy:
+    runs-on: ubuntu-latest
+    steps:
+      - run: gh workflow run pages.yml --ref main --repo "$GITHUB_REPOSITORY"
+        env:
+          GH_TOKEN: ${{ github.token }}

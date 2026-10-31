@@ -3,7 +3,13 @@
 // The cache is named after the app version in js/version.js; bump that on release,
 // and keep SHELL in step when files are added or removed.
 importScripts('js/version.js');
-const CACHE = 'cartographer-' + self.AC_VERSION;
+// The preview (…/preview/) has a cache of its own; each worker leaves the
+// other's alone, and the live app's worker doesn't answer for the preview.
+const PREVIEW = self.registration.scope.endsWith('/preview/');
+const PREFIX = PREVIEW ? 'cartographer-preview-' : 'cartographer-';
+const own = (k) => k.startsWith(PREFIX) && (PREVIEW || !k.startsWith('cartographer-preview-'));
+const PREVIEW_PATH = new URL('preview/', self.registration.scope).pathname;
+const CACHE = PREFIX + self.AC_VERSION;
 const SHELL = [
   './', 'index.html', 'manifest.webmanifest', 'css/app.css', 'css/editor.css',
   'js/app.js', 'js/assets.js', 'js/assetsync.js', 'js/auth.js', 'js/config.js', 'js/db.js', 'js/export.js', 'js/icons.js', 'js/images.js', 'js/packfile.js', 'js/store.js', 'js/sync.js', 'js/ui.js', 'js/util.js',
@@ -23,7 +29,7 @@ self.addEventListener('install', (e) => {
 
 self.addEventListener('activate', (e) => {
   e.waitUntil(caches.keys()
-    .then((keys) => Promise.all(keys.filter((k) => k.startsWith('cartographer-') && k !== CACHE).map((k) => caches.delete(k))))
+    .then((keys) => Promise.all(keys.filter((k) => own(k) && k !== CACHE).map((k) => caches.delete(k))))
     .then(() => self.clients.claim()));
 });
 
@@ -32,6 +38,7 @@ self.addEventListener('fetch', (e) => {
   const url = new URL(req.url);
   // Only handle our own static files; Microsoft login/Graph traffic goes straight to the network.
   if (req.method !== 'GET' || url.origin !== location.origin) return;
+  if (!PREVIEW && url.pathname.startsWith(PREVIEW_PATH)) return;
   // Update checks must always reach the network and never be cached.
   if (url.searchParams.has('check')) return;
   // Sign-in redirects come back as ./?code=… — serve the shell for any navigation.
