@@ -5,3 +5,11 @@ node_modules/
 # OneDrive. They must never be committed here.
 assets-local/
 *.zip
+
+# Test output (tests/runall.sh). The test fixtures in tests/pack*/ are
+# simple generated shapes, not art.
+tests/out/
+tests/*.png
+tests/*.webp
+tests/*.atlaspack
+!tests/pack.zip

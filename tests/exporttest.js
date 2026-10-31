@@ -1,0 +1,28 @@
+const { chromium } = require('playwright');
+const { device, waitSynced, stroke } = require('./mock.js');
+let CAT = null;
+(async () => {
+  const browser = await chromium.launch();
+  const A = await device(browser, 'A');
+  A.context().setDefaultTimeout(30000);
+  await waitSynced(A);
+  await A.goto('http://localhost:8765/#/library');
+  await A.setInputFiles('#pickFolder', 'pack/Fantasy Stamps');
+  await A.waitForSelector('.modal input[name=pack]'); await A.click('.modal button.primary');
+  await A.waitForSelector('.pack-row', { timeout: 20000 });
+  await A.goto('http://localhost:8765/#/');
+  await A.click('#newProject'); await A.fill('input[name=name]', 'Export me'); await A.click('.modal button.primary');
+  await A.waitForSelector('.editor-canvas');
+  await A.click('[data-tool=land]');
+  await stroke(A, [[300, 250], [600, 300], [700, 500]]);
+  CAT = null; await A.click('[data-tool=stamp]'); await A.waitForSelector('.pk-browse .tile'); await A.click(`${CAT ? `.pk-section:has(.pk-cat-name:text-is("${CAT}")) ` : '.pk-browse '}.tile >> nth=1`);
+  await A.mouse.click(450, 300);
+  await A.click('#exportBtn');
+  await A.waitForSelector('.modal select[name=scale]');
+  console.log('sizes:', await A.$$eval('.modal option', (o) => o.map((x) => x.textContent)));
+  await A.check('input[value="image/webp"]');
+  const [dl] = await Promise.all([A.waitForEvent('download', { timeout: 60000 }), A.click('.modal button.primary')]);
+  await dl.saveAs('export.webp');
+  console.log('file:', dl.suggestedFilename(), require('fs').statSync('export.webp').size, 'bytes');
+  await browser.close();
+})().catch((e) => { console.error('FAIL', e); process.exit(1); });

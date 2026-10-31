@@ -1,0 +1,53 @@
+const { chromium } = require('playwright');
+const { device, drive, waitSynced, stroke } = require('./mock.js');
+let CAT = null;
+(async () => {
+  const browser = await chromium.launch();
+  const A = await device(browser, 'A');
+  await waitSynced(A);
+  await A.goto('http://localhost:8765/#/library');
+  await A.setInputFiles('#pickFolder', 'pack/Fantasy Stamps');
+  await A.waitForSelector('.modal input[name=pack]'); await A.click('.modal button.primary');
+  await A.waitForSelector('.pack-row', { timeout: 20000 });
+  await A.goto('http://localhost:8765/#/');
+  await A.click('#newProject'); await A.fill('input[name=name]', 'Stamp test'); await A.click('.modal button.primary');
+  await A.waitForSelector('.editor-canvas');
+  CAT = null; await A.click('[data-tool=stamp]');
+  await A.waitForSelector('.picker:not([hidden]) .pk-browse .tile');
+  console.log('picker cats:', await A.$$eval('.pk-cat option', (o) => o.map((x) => x.textContent)));
+  await A.click(`${CAT ? `.pk-section:has(.pk-cat-name:text-is("${CAT}")) ` : '.pk-browse '}.tile >> nth=2`);
+  await A.waitForTimeout(300);
+  await A.mouse.click(400, 300);
+  await A.mouse.click(600, 320);
+  // scatter trees
+  CAT = 'Trees';
+  CAT = null; await A.click('[data-tool=stamp]'); await A.click('[data-place=scatter]');
+  await A.waitForTimeout(200);
+  await A.$eval('.stamp-size', (r) => { r.value = 30; r.dispatchEvent(new Event('input')); });
+  await A.click('[data-act=picker]'); // close
+  await stroke(A, [[250, 500], [500, 560], [800, 520], [950, 600]]);
+  const objs = async (p) => p.evaluate(async () => { const s = await import('./js/store.js'); const id = location.hash.split('/p/')[1]; return s.liveObjects(await s.getDoc(id)).map((o) => o.kind); });
+  console.log('A objects after stamp+scatter:', (await objs(A)).join(','));
+  // select + move + rotate + delete
+  await A.click('[data-tool=select]');
+  await A.mouse.click(600, 320);
+  console.log('selected?', await A.$eval('[data-act=delete]', (b) => !b.hidden && !b.disabled));
+  await A.mouse.move(600, 320); await A.mouse.down(); await A.mouse.move(650, 260, { steps: 5 }); await A.mouse.up();
+  await A.keyboard.press('f');
+  await A.screenshot({ path: 'stamps-A.png' });
+  await A.keyboard.press('Delete');
+  const n1 = (await objs(A)).length;
+  await A.keyboard.press('Control+z');
+  console.log('delete/undo counts:', n1, (await objs(A)).length);
+  await A.waitForTimeout(3500); await waitSynced(A); await A.waitForTimeout(3000);
+  const pid = A.url().split('/p/')[1];
+  const B = await device(browser, 'B');
+  await waitSynced(B); await B.waitForTimeout(2500);
+  await B.goto('http://localhost:8765/#/p/' + pid);
+  await B.waitForSelector('.editor-canvas'); await B.waitForTimeout(2500);
+  console.log('B objects:', (await objs(B)).join(','));
+  await B.screenshot({ path: 'stamps-B.png' });
+  await B.goto('http://localhost:8765/#/'); await B.waitForTimeout(1500);
+  await B.screenshot({ path: 'stamps-home.png' });
+  await browser.close();
+})().catch((e) => { console.error('FAIL', e); process.exit(1); });
