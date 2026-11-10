@@ -83,11 +83,15 @@ const stamp = (obj, prev) => { obj.updatedAt = Math.max(Date.now(), (prev?.updat
 
 // --- projects -----------------------------------------------------------
 
-// A deleted map leaves a record saying so, for other devices to delete it
-// too; records older than GONE_DAYS are dropped, by when every device that
-// syncs has seen them.
-const DAY = 864e5, GONE_DAYS = 90;
-export const live = () => [...projects.values()].filter((p) => !p.deleted).sort((a, b) => b.updatedAt - a.updatedAt);
+// A map is live, in the bin ("Recently deleted": binnedAt set, its drawing
+// kept and synced, restorable), or deleted for good (a record saying so, so
+// other devices delete it too). Maps go from the bin for good after BIN_DAYS;
+// records of deleted maps are dropped after GONE_DAYS, by when every device
+// that syncs has seen them.
+const DAY = 864e5, BIN_DAYS = 30, GONE_DAYS = 90;
+export const live = () => [...projects.values()].filter((p) => !p.deleted && !p.binnedAt).sort((a, b) => b.updatedAt - a.updatedAt);
+export const binned = () => [...projects.values()].filter((p) => !p.deleted && p.binnedAt).sort((a, b) => b.binnedAt - a.binnedAt);
+export const binDaysLeft = (p) => Math.max(0, Math.ceil((p.binnedAt + BIN_DAYS * DAY - Date.now()) / DAY));
 export const project = (id) => { const p = projects.get(id); return p && !p.deleted ? p : null; };
 
 export async function saveProject(p) {
@@ -110,6 +114,19 @@ export async function createProject({ name, width, height, type, style }) {
   return p;
 }
 
+export async function binProject(id) {
+  const p = project(id);
+  if (p && !p.binnedAt) await saveProject({ ...p, binnedAt: Date.now() });
+}
+
+export async function restoreProject(id) {
+  const p = project(id);
+  if (!p?.binnedAt) return;
+  const { binnedAt, ...rest } = p;
+  await saveProject(rest);
+}
+
+// For good: here, and (at the next sync) on OneDrive and every device.
 export async function deleteProject(id) {
   if (!project(id)) return;
   await saveProject({ id, deleted: true });
@@ -353,8 +370,10 @@ export async function dropDoc(id) {
   await forgetDoc(id);
 }
 
-// Housekeeping (before each sync): deletion records older than GONE_DAYS are dropped.
+// Housekeeping (before each sync): maps in the bin longer than BIN_DAYS go
+// for good, and deletion records older than GONE_DAYS are dropped.
 export async function tidyProjects() {
+  for (const p of binned()) if (Date.now() - p.binnedAt > BIN_DAYS * DAY) await deleteProject(p.id);
   const old = [...projects.values()].filter((p) => p.deleted && Date.now() - (p.updatedAt || 0) > GONE_DAYS * DAY);
   if (!old.length) return;
   for (const p of old) projects.delete(p.id);

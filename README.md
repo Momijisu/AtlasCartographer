@@ -6,6 +6,7 @@ A fantasy map maker for phone and PC, and a companion to [WorldAtlas](https://gi
 
 ## Features
 
+- Deleted maps go to Recently deleted on the maps page, on every device, to restore or delete for good; they go for good on their own after 30 days
 - World, region, city and battlemap maps in one editor: world and region maps start as sea, cities and battlemaps as land, and battlemaps are sized in squares with a matching grid
 - Land and water brushes that draw the coastline, its outline and ripples in the sea for you, with coasts from smooth to rugged
 - Terrain painting: any texture from your art library brushed onto the land with soft edges and adjustable strength, stopping at the coast

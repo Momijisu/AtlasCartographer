@@ -99,7 +99,9 @@ const forceSync = (p) => p.click('#syncBtn');
   console.log('after undo: A', await count(A), 'B', await count(B));
   // rename + delete from B
   await B.goto('http://localhost:8765/#/'); await B.waitForSelector('.project-card');
-  await B.click('[data-menu]'); await B.click('[data-del]'); await B.click('[data-yes]');
+  // (Delete moves it to the bin; Delete forever there is what removes it everywhere.)
+  await B.click('[data-menu]'); await B.click('[data-del]');
+  await B.click('.bin > summary'); await B.click('.bin [data-forever]'); await B.click('[data-yes]');
   await B.waitForTimeout(3500); await waitSynced(B);
   await forceSync(A); await waitSynced(A); await A.waitForTimeout(500);
   console.log('A url after delete:', A.url(), 'drive:', [...drive.keys()]);

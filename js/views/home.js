@@ -40,7 +40,9 @@ export function viewHome(view) {
         <button class="icon-btn" data-menu="${p.id}" aria-label="Rename or delete" title="Rename or delete">${icon('dots-three-vertical')}</button>
       </a>`).join('')}</div>`
     : `<div class="empty-state">${icon('map-trifold', 'empty-emblem')}<h2>No maps yet</h2>
-        <p>Start a new map. It's saved on this device, and syncs to your other devices once OneDrive is connected in Settings.</p></div>`}`;
+        <p>Start a new map. It's saved on this device, and syncs to your other devices once OneDrive is connected in Settings.</p></div>`}
+    ${binSection()}`;
+  wireBin(view);
   $('#newProject').onclick = newProjectDialog;
   for (const b of $$('[data-menu]', view)) {
     b.onclick = (e) => { e.preventDefault(); e.stopPropagation(); projectMenu(b.dataset.menu); };
@@ -52,6 +54,50 @@ export function viewHome(view) {
   // Stamps' pictures load after the first paint: redraw as they arrive.
   let t;
   state.cleanup = images.onLoad(() => { clearTimeout(t); t = setTimeout(() => $$('[data-thumb]', view).forEach(paint), 150); });
+}
+
+// "Recently deleted": maps in the bin, to restore or delete for good.
+function binSection() {
+  const list = store.binned();
+  if (!list.length) return '';
+  return `<details class="bin">
+      <summary>${icon('trash')} Recently deleted <span class="muted">${list.length}</span></summary>
+      <p class="muted small">Maps here are deleted for good 30 days after they were deleted, on all your devices.</p>
+      ${list.map((p) => {
+        const left = store.binDaysLeft(p);
+        return `<div class="bin-row"><span><b>${esc(p.name)}</b>
+            <span class="muted small">deleted ${timeAgo(p.binnedAt)} · ${left ? `${left} ${left === 1 ? 'day' : 'days'} left` : 'goes at the next sync'}</span></span>
+          <span class="bin-actions"><button class="btn small" data-restore="${p.id}">Restore</button>
+          <button class="btn small danger" data-forever="${p.id}">Delete forever</button></span></div>`;
+      }).join('')}
+      ${list.length > 1 ? '<div class="actions left"><button class="btn small quiet danger" data-empty>Empty the bin</button></div>' : ''}
+    </details>`;
+}
+
+function wireBin(view) {
+  const bin = $('.bin', view);
+  if (!bin) return;
+  bin.onclick = async (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    if (b.dataset.restore) {
+      await store.restoreProject(b.dataset.restore);
+      toast('Map restored');
+    } else if (b.dataset.forever) {
+      const p = store.project(b.dataset.forever);
+      if (!(await confirmDialog(`Delete “${p?.name}” for good, from all your devices? This can’t be undone.`, 'Delete forever'))) return;
+      await store.deleteProject(b.dataset.forever);
+      toast('Map deleted for good');
+    } else if ('empty' in b.dataset) {
+      const list = store.binned();
+      if (!(await confirmDialog(`Delete the ${list.length} maps in the bin for good, from all your devices? This can’t be undone.`, 'Empty the bin'))) return;
+      for (const p of list) await store.deleteProject(p.id);
+      toast('Bin emptied');
+    } else return;
+    state.route();
+    // Keep the bin open while working in it.
+    $('.bin')?.setAttribute('open', '');
+  };
 }
 
 function newProjectDialog() {
@@ -140,11 +186,11 @@ function projectMenu(id) {
     </form>`, {
     onMount: (m, close) => {
       $('[data-cancel]', m).onclick = () => close(null);
+      // Into the bin, on every device: it can be restored for 30 days.
       $('[data-del]', m).onclick = async () => {
         close(null);
-        if (!(await confirmDialog(`Delete “${p.name}” from all your devices?`))) return;
-        await store.deleteProject(id);
-        toast('Map deleted');
+        await store.binProject(id);
+        toast('Moved to Recently deleted');
         state.route();
       };
       $('[data-dup]', m).onclick = async () => {

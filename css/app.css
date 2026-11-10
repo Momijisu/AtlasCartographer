@@ -301,6 +301,13 @@ details.cat[open] .cat-name .caret { transform: rotate(90deg); }
 .stamp-vars .tile { cursor: pointer; }
 .stamp-vars .tile.on { border-color: var(--rubric); box-shadow: 0 0 0 2px var(--rubric); }
 summary .icon-btn.small { width: 28px; height: 28px; }
+/* Maps page: Recently deleted */
+.bin { margin-top: 2rem; border-top: 1px solid var(--rule); padding-top: .5rem; }
+.bin > summary { cursor: pointer; display: inline-flex; align-items: center; gap: .4rem; font: 600 1rem var(--sans); color: var(--text-2); padding: .4rem 0; }
+.bin-row { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; padding: .5rem 0; border-bottom: 1px solid var(--rule); }
+.bin-actions { display: inline-flex; gap: .4rem; margin-left: auto; }
+.bin-row > span:first-child { flex: 1 1 14rem; display: flex; flex-direction: column; gap: .1rem; min-width: 0; }
+
 /* Keyboard focus shows clearly (mouse clicks don't draw it). */
 button:focus-visible, a:focus-visible, summary:focus-visible, [tabindex]:focus-visible,
 input[type=checkbox]:focus-visible, input[type=radio]:focus-visible, input[type=range]:focus-visible {
