@@ -277,3 +277,47 @@ kbd { font: 500 .82rem var(--mono); background: var(--ink-3); border: 1px solid 
 .pk-badge.static { pointer-events: none; right: 1px; bottom: 1px; min-width: 0; height: .95rem; font-size: .6rem; padding: 0 .2rem; }
 .pk-set.open > .tile { box-shadow: 0 0 0 1px var(--brass); }
 .pk-grid .tile.variant { border-style: dashed; background-color: color-mix(in srgb, var(--brass) 6%, transparent); }
+
+/* History and view (undo, redo, zoom, map style, layers): their own small
+   bar at the top right, so they're always on screen whatever the tool. */
+.viewbar {
+  position: absolute; top: .6rem; right: .6rem; z-index: 3;
+  display: flex; align-items: center; gap: .15rem; padding: .25rem;
+  background: color-mix(in srgb, var(--ink-2) 94%, transparent);
+  border: 1px solid var(--rule-strong); border-radius: 8px; box-shadow: var(--shadow);
+  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+}
+.viewbar .tool { width: 36px; height: 36px; }
+/* Panels open below it, and over the map's hint. */
+.picker { top: 3.9rem; z-index: 4; }
+.side-panel { z-index: 4; }
+.style-panel { max-height: calc(100% - 9.6rem); }
+.map-hint, .ro-banner { top: 3.9rem; }
+.save-banner { top: 6.6rem; }
+
+/* A tool rail too long for the screen fades where there's more to scroll to. */
+.toolrail.more-after { -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent); mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent); }
+.toolrail.more-before { -webkit-mask-image: linear-gradient(to top, #000 calc(100% - 28px), transparent); mask-image: linear-gradient(to top, #000 calc(100% - 28px), transparent); }
+.toolrail.more-before.more-after { -webkit-mask-image: linear-gradient(to bottom, transparent, #000 28px, #000 calc(100% - 28px), transparent); mask-image: linear-gradient(to bottom, transparent, #000 28px, #000 calc(100% - 28px), transparent); }
+.toolrail.across.more-after { -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); }
+.toolrail.across.more-before { -webkit-mask-image: linear-gradient(to left, #000 calc(100% - 28px), transparent); mask-image: linear-gradient(to left, #000 calc(100% - 28px), transparent); }
+.toolrail.across.more-before.more-after { -webkit-mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent); mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent); }
+
+.pk-tall { display: none; }
+@media (max-width: 600px) {
+  /* Pinch to zoom; no keyboard for the shortcut list. */
+  .viewbar [data-act="zoom-in"], .viewbar [data-act="zoom-out"], .viewbar [data-act="shortcuts"], .viewbar .tb-sep { display: none; }
+  .viewbar { top: .4rem; right: .4rem; }
+  /* The picker is a sheet over the lower half of the map, or nearly all of it. */
+  .picker { top: 50%; height: auto; }
+  .picker.tall { top: 3.4rem; }
+  .pk-tall { display: inline-grid; }
+  .picker.tall .pk-tall .i { transform: rotate(180deg); }
+  .picker header { padding-top: .25rem; padding-bottom: 0; }
+  .picker header b { font-size: 1.1rem; }
+  .picker .pk-filters { padding-top: .1rem; }
+  .picker .pk-search { min-height: 32px; }
+  .picker > .pk-actions { padding-top: .15rem; padding-bottom: .15rem; font-size: .85rem; }
+  .map-hint, .ro-banner { top: 3.4rem; }
+  .save-banner { top: 6rem; }
+}

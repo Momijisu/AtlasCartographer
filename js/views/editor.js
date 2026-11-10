@@ -151,9 +151,11 @@ export async function viewEditor(view, id) {
           <button class="tool" data-act="back" title="Send backward (Ctrl ↓)" aria-label="Send to back">${icon('arrow-down')}</button>
           <button class="tool" data-act="delete" title="Delete (Del)" aria-label="Delete">${icon('trash')}</button>
         </span>
-        <span class="tb-sep"></span>
+      </div>
+      <div class="viewbar" role="toolbar" aria-label="History and view">
         <button class="tool" data-act="undo" title="Undo (Ctrl+Z)" aria-label="Undo">${icon('arrow-counter-clockwise')}</button>
         <button class="tool flip" data-act="redo" title="Redo (Ctrl+Shift+Z)" aria-label="Redo">${icon('arrow-counter-clockwise')}</button>
+        <span class="tb-sep"></span>
         <span class="zoom">
           <button class="tool small" data-act="zoom-out" title="Zoom out (−)" aria-label="Zoom out">${icon('magnifying-glass-minus')}</button>
           <button class="zoom-pct" data-act="zoom-100" title="Zoom to 100%" aria-label="Zoom to 100%">100%</button>
@@ -318,7 +320,7 @@ class Editor {
     }
     $('.ro-banner', this.root).hidden = !on;
     const viewOnly = '[data-act^="zoom"], [data-act="fit"], [data-act="shortcuts"], [data-tool="pan"]';
-    for (const b of $$('.toolrail button, .toolbar button, .toolbar input', this.root)) b.disabled = on && !b.matches(viewOnly);
+    for (const b of $$('.toolrail button, .toolbar button, .toolbar input, .viewbar button', this.root)) b.disabled = on && !b.matches(viewOnly);
     this.syncToolbar();
     this.syncHistory();
     this.syncHint();
@@ -335,6 +337,7 @@ class Editor {
   // --- view transform ---------------------------------------------------
 
   resize() {
+    this.railHint?.();
     const r = this.canvas.getBoundingClientRect();
     const dpr = Math.min(devicePixelRatio || 1, 2);
     this.vw = r.width; this.vh = r.height; this.dpr = dpr;
@@ -873,7 +876,10 @@ class Editor {
     this.poly = null;
     keep('ac.tool', t);
     if (t !== 'select') this.clearSel();
-    // The stamp tool keeps its picker open (it's closed with its X, or F).
+    // A picker that belongs to another tool closes; the stamp tool keeps its
+    // own open (it's closed with its X, or F).
+    const owner = { stamp: ['stamp', 'scatter'], terrain: ['terrain'], shapeFill: ['shape'] }[this.pickerMode];
+    if (owner && !owner.includes(t)) $('.picker', this.root).hidden = true;
     if ((t === 'stamp' || t === 'scatter') && (prev !== 'stamp' && prev !== 'scatter' || !this.brush.length)) this.openPicker();
     this.syncToolbar();
     this.redrawOverlay();
@@ -1429,6 +1435,7 @@ class Editor {
     const scroll = $('.pk-browse', el)?.scrollTop || 0;
     el.innerHTML = `<header><b>${title}</b>
         ${tex ? '' : `<label class="check small" title="Or hold Ctrl (Cmd on a Mac) while clicking"><input type="checkbox" class="pk-multi" ${this.multi ? 'checked' : ''}> Pick several</label>`}
+        <button class="icon-btn pk-tall" data-tall aria-label="Taller" title="Taller or shorter">${icon('caret-down')}</button>
         ${closeBtn}</header>
       <div class="pk-filters"><input type="search" class="pk-search" placeholder="Search all art…" value="${esc(this.pickQuery || '')}" aria-label="Search art"></div>
       <div class="pk-actions">${tex ? `<button class="btn small" data-plain>${plainLabel}</button>`
@@ -1466,6 +1473,8 @@ class Editor {
       else this.setLandTexture(id);
     };
     $('[data-close]', el).onclick = () => { el.hidden = true; };
+    // On phones the picker covers the lower half of the map, or nearly all of it.
+    $('[data-tall]', el)?.addEventListener('click', () => { el.classList.toggle('tall'); });
     this.wirePreview(el);
     $('.pk-multi', el)?.addEventListener('change', (e) => { this.multi = e.target.checked; keep('ac.multi', this.multi); });
     $('[data-plain]', el)?.addEventListener('click', () => { pick(null); this.markPicker(); });
@@ -1693,6 +1702,17 @@ class Editor {
     };
     $('.toolbar', this.root).onclick = onBar;
     $('.toolrail', this.root).onclick = onBar;
+    $('.viewbar', this.root).onclick = onBar;
+    // A tool rail too long for the screen fades at the end there's more to scroll to.
+    const rail = $('.toolrail', this.root);
+    this.railHint = () => {
+      const across = rail.scrollWidth > rail.clientWidth + 1;
+      const [pos, room, size] = across ? [rail.scrollLeft, rail.scrollWidth, rail.clientWidth] : [rail.scrollTop, rail.scrollHeight, rail.clientHeight];
+      rail.classList.toggle('more-before', pos > 2);
+      rail.classList.toggle('more-after', pos + size < room - 2);
+      rail.classList.toggle('across', across);
+    };
+    rail.addEventListener('scroll', this.railHint, { passive: true });
     // Slider handlers set the value first; this then updates the numbers beside them.
     // The slider last moved is the one Shift ↑ ↓ change.
     $('.toolbar', this.root).addEventListener('input', (e) => { if (e.target.type === 'range') this.lastRange = e.target; this.showValues(); });
