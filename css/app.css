@@ -301,4 +301,9 @@ details.cat[open] .cat-name .caret { transform: rotate(90deg); }
 .stamp-vars .tile { cursor: pointer; }
 .stamp-vars .tile.on { border-color: var(--rubric); box-shadow: 0 0 0 2px var(--rubric); }
 summary .icon-btn.small { width: 28px; height: 28px; }
+/* Keyboard focus shows clearly (mouse clicks don't draw it). */
+button:focus-visible, a:focus-visible, summary:focus-visible, [tabindex]:focus-visible,
+input[type=checkbox]:focus-visible, input[type=radio]:focus-visible, input[type=range]:focus-visible {
+  outline: 2px solid var(--brass); outline-offset: 2px;
+}
 .preview-tag { margin-left: .4rem; padding: .05rem .4rem; border-radius: 4px; background: var(--rubric); color: #fff4ea; font: 600 .7rem/1.4 var(--sans); font-style: normal; letter-spacing: .04em; text-transform: uppercase; vertical-align: middle; }

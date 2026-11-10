@@ -37,15 +37,29 @@ export function modal(title, body, { onMount, wide } = {}) {
       <header><h2>${esc(title)}</h2><button class="icon-btn" data-close aria-label="Close">${icon('x')}</button></header>
       <div class="modal-body">${body}</div></div>`;
     const opener = document.activeElement;
-    const close = (v) => { wrap.remove(); document.removeEventListener('keydown', onKey); opener?.focus?.(); resolve(v); };
-    // Only the topmost dialog answers Escape.
-    const onKey = (e) => { if (e.key === 'Escape' && root.lastElementChild === wrap) { e.stopImmediatePropagation(); close(null); } };
+    const close = (v) => { wrap.remove(); document.removeEventListener('keydown', onKey, true); opener?.focus?.(); resolve(v); };
+    const focusables = () => [...wrap.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])')]
+      .filter((el) => !el.disabled && el.offsetParent !== null);
+    // Only the topmost dialog answers Escape, and Tab goes round within it.
+    const onKey = (e) => {
+      if (root.lastElementChild !== wrap) return;
+      if (e.key === 'Escape') { e.stopImmediatePropagation(); close(null); return; }
+      if (e.key !== 'Tab') return;
+      const list = focusables();
+      if (!list.length) return;
+      const i = list.indexOf(document.activeElement);
+      const next = e.shiftKey ? (i <= 0 ? list.length - 1 : i - 1) : (i < 0 || i === list.length - 1 ? 0 : i + 1);
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      list[next].focus();
+    };
     wrap.addEventListener('mousedown', (e) => { if (e.target === wrap) close(null); });
     wrap.querySelector('[data-close]').onclick = () => close(null);
-    document.addEventListener('keydown', onKey);
+    document.addEventListener('keydown', onKey, true);
     root.appendChild(wrap);
     onMount?.(wrap.querySelector('.modal'), close);
-    wrap.querySelector('input:not([type=hidden]),textarea,select')?.focus();
+    // Focus starts in the dialog: where onMount put it, else its first field, else its first control.
+    if (!wrap.contains(document.activeElement)) (wrap.querySelector('input:not([type=hidden]),textarea,select') || focusables().find((el) => !el.matches('[data-close]')) || wrap.querySelector('[data-close]'))?.focus();
   });
 }
 

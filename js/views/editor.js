@@ -925,6 +925,8 @@ class Editor {
     $('[data-act="stamp-random"]', this.root).classList.toggle('on', this.stampRandom);
     $('[data-act="stamp-random"]', this.root).setAttribute('aria-pressed', this.stampRandom);
     $('[data-act="stamp-flip"]', this.root).setAttribute('aria-pressed', this.stampFlip);
+    // Buttons that are on or off say so to screen readers too.
+    for (const b of $$('.toolrail [data-tool], [data-place], [data-landmode], [data-shapekind], [data-shapemode], [data-dash], [data-pathstyle], [data-ink]', this.root)) b.setAttribute('aria-pressed', b.classList.contains('on'));
     this.showValues();
     this.syncHistory();
     const adjustable = all.some((o) => o.kind === 'stamp' || o.kind === 'path' || o.kind === 'shape');
@@ -1779,6 +1781,10 @@ class Editor {
       else { this.x -= e.deltaX; this.y -= e.deltaY; this.redraw(); }
     }, { passive: false });
     this.on(document, 'keydown', (e) => this.key(e));
+    // Whether the focused control was reached with the keyboard (see key()).
+    let pointerAt = 0;
+    this.on(document, 'pointerdown', () => { pointerAt = performance.now(); }, true);
+    this.on(document, 'focusin', () => { this.keyboardFocus = performance.now() - pointerAt > 300; });
     this.on(document, 'keyup', (e) => {
       if (e.key === ' ') { this.spaceDown = false; this.syncToolbar(); }
       // R let go without turning anything with the wheel: it was a tap, for the shape tool.
@@ -1820,16 +1826,20 @@ class Editor {
       }
       return;
     }
+    // A control reached with the keyboard keeps Tab (to move on) and Space
+    // (to press it). One that only has focus because it was clicked doesn't:
+    // there Tab is "previous tool" and Space moves the view, as on the map.
+    const el = document.activeElement, onControl = el && el !== document.body && el !== this.canvas;
+    if (onControl && this.keyboardFocus && (e.key === 'Tab' || e.key === ' ')) return;
     if (e.key === ' ') {
       e.preventDefault();
-      // Space pans; it mustn't also press whichever toolbar button has focus.
-      if (document.activeElement?.tagName === 'BUTTON') document.activeElement.blur();
+      if (onControl) el.blur();
       if (!this.spaceDown) { this.spaceDown = true; this.syncToolbar(); }
       return;
     }
     if (e.key === '?' || (letter === 'k' && !e.altKey)) { e.preventDefault(); showShortcuts(); return; }
     if (e.key === '/') { e.preventDefault(); this.togglePanel('.layers-panel', () => this.renderLayers()); return; }
-    if (e.key === 'Tab') { e.preventDefault(); if (this.prevTool && TOOLS.some(([t]) => t === this.prevTool)) this.setTool(this.prevTool); return; }
+    if (e.key === 'Tab' && !e.shiftKey) { e.preventDefault(); if (onControl) el.blur(); if (this.prevTool && TOOLS.some(([t]) => t === this.prevTool)) this.setTool(this.prevTool); return; }
     if (code === 'Backquote') { e.preventDefault(); this.restoreSelection(); return; }
     if (this.poly) {
       if (e.key === 'Enter') { e.preventDefault(); this.finishPoly(); return; }
