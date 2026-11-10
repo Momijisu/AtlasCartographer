@@ -83,6 +83,10 @@ const stamp = (obj, prev) => { obj.updatedAt = Math.max(Date.now(), (prev?.updat
 
 // --- projects -----------------------------------------------------------
 
+// A deleted map leaves a record saying so, for other devices to delete it
+// too; records older than GONE_DAYS are dropped, by when every device that
+// syncs has seen them.
+const DAY = 864e5, GONE_DAYS = 90;
 export const live = () => [...projects.values()].filter((p) => !p.deleted).sort((a, b) => b.updatedAt - a.updatedAt);
 export const project = (id) => { const p = projects.get(id); return p && !p.deleted ? p : null; };
 
@@ -118,15 +122,29 @@ export async function deleteProject(id) {
 // anything the remote copy lacks.
 export async function mergeProjects(remote) {
   let localAhead = false;
-  const incoming = [];
+  const incoming = [], kept = [];
   const seen = new Set();
   for (const r of remote) {
+    // An old deletion record isn't taken in, and the sync file is rewritten without it.
+    if (r.deleted && Date.now() - (r.updatedAt || 0) > GONE_DAYS * DAY) { localAhead = true; continue; }
     seen.add(r.id);
     const l = projects.get(r.id);
-    if (!l || (r.updatedAt || 0) > (l.updatedAt || 0)) incoming.push(r);
-    else if ((l.updatedAt || 0) > (r.updatedAt || 0)) localAhead = true;
+    if (!l || (r.updatedAt || 0) > (l.updatedAt || 0)) {
+      // Deleted elsewhere while this device has edits it hasn't synced: the
+      // edits win, and the map comes back for every device.
+      if (r.deleted && l && !l.deleted && docDirty(r.id)) {
+        kept.push({ ...l, updatedAt: Math.max(Date.now(), (r.updatedAt || 0) + 1) });
+        localAhead = true;
+      } else incoming.push(r);
+    } else if ((l.updatedAt || 0) > (r.updatedAt || 0)) localAhead = true;
   }
   if ([...projects.keys()].some((id) => !seen.has(id))) localAhead = true;
+  if (kept.length) {
+    for (const p of kept) projects.set(p.id, p);
+    await db.putMany('projects', kept);
+    await saveMeta({ localRev: meta.localRev + 1 }, { bump: ['localRev'] });
+    notify({ local: false, store: 'projects', kept: kept.map((p) => p.name) });
+  }
   for (const r of incoming) {
     projects.set(r.id, r);
     if (r.deleted) { docs.delete(r.id); await db.del('docs', [r.id]); await forgetDoc(r.id); }
@@ -333,6 +351,15 @@ export async function dropDoc(id) {
   docs.delete(id);
   await db.del('docs', [id]);
   await forgetDoc(id);
+}
+
+// Housekeeping (before each sync): deletion records older than GONE_DAYS are dropped.
+export async function tidyProjects() {
+  const old = [...projects.values()].filter((p) => p.deleted && Date.now() - (p.updatedAt || 0) > GONE_DAYS * DAY);
+  if (!old.length) return;
+  for (const p of old) projects.delete(p.id);
+  await db.del('projects', old.map((p) => p.id));
+  await saveMeta({ localRev: meta.localRev + 1 }, { bump: ['localRev'] });
 }
 
 // Make everything on this device count as not yet uploaded, for an account

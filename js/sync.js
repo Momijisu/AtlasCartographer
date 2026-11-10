@@ -80,6 +80,7 @@ async function run() {
   setStatus('syncing');
   try {
     await checkAccount();
+    await store.tidyProjects();
     await retry(INDEX, syncIndex);
     await retry(CATALOGUE, syncCatalogue);
     const remote = await listDocs();

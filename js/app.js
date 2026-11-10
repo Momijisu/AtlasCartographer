@@ -29,6 +29,7 @@ async function boot() {
   wireChrome();
   store.onChange((e) => {
     if (e.local) return;
+    if (e.kept?.length) toast(`${e.kept.length === 1 ? `“${e.kept[0]}” was` : `${e.kept.length} maps were`} deleted on another device, but had edits here that hadn’t synced yet, so ${e.kept.length === 1 ? 'it’s' : 'they’re'} kept`, 8000);
     if (state.onRemote) state.onRemote(e);
     else route();
   });
