@@ -295,6 +295,7 @@ class Editor {
     this.disposers.forEach((d) => d());
     cancelAnimationFrame(this.raf);
     clearTimeout(this.refreshTimer);
+    clearTimeout(this.settleTimer);
     this.claim?.release();
   }
 
@@ -363,7 +364,7 @@ class Editor {
     this.x = cx - (cx - this.x) * (ns / this.s);
     this.y = cy - (cy - this.y) * (ns / this.s);
     this.s = ns;
-    this.redraw();
+    this.redrawView();
   }
 
   toMap(cx, cy) { return [(cx - this.x) / this.s, (cy - this.y) / this.s]; }
@@ -395,16 +396,30 @@ class Editor {
   // After a gesture step: the map changes only if the gesture changes the
   // drawing or the view.
   gestureRedraw() {
-    if (!this.gesture || MAP_GESTURES.has(this.gesture.kind)) this.redraw(); else this.redrawOverlay();
+    const k = this.gesture?.kind;
+    if (k === 'pan' || k === 'pinch') this.redrawView();
+    else if (!k || MAP_GESTURES.has(k)) this.redraw(); else this.redrawOverlay();
+  }
+
+  // Only the view moved (a pan, a pinch, a zoom): while it keeps moving, the
+  // last finished picture of the map is shown moved and scaled, which takes
+  // a few milliseconds where drawing a busy map takes a hundred or more; the
+  // map is drawn properly once it's been still for a moment.
+  redrawView() {
+    this.viewDirty = true;
+    this.schedule();
   }
 
   // One frame going wrong (say, a canvas the device can't give us) shouldn't
   // end the drawing: the error is logged once per kind, and the next change
   // starts a fresh frame on canvases reset to their defaults.
   paint() {
+    const t0 = performance.now();
+    let full = false;
     try {
-      if (this.mapDirty) this.paintMap();
-      this.mapDirty = false;
+      if (this.mapDirty || (this.viewDirty && !this.pictureFits())) { this.paintMap(); full = true; }
+      else if (this.viewDirty) { this.paintPicture(); this.settleSoon(); }
+      this.mapDirty = this.viewDirty = false;
       this.paintOverlay();
       this.paintError = null;
       this.scheduleLandRefresh();
@@ -417,6 +432,36 @@ class Editor {
     }
     const zoom = (this.zoomEl ??= $('.zoom-pct', this.root)), pct = `${Math.round(this.s * 100)}%`;
     if (zoom.textContent !== pct) zoom.textContent = pct;
+    // Tests time frames by setting window.__acPerf to an array.
+    window.__acPerf?.push({ full, ms: performance.now() - t0 });
+  }
+
+  // The last full picture of the map, and the view it was drawn at.
+  savePicture() {
+    const c = this.canvas, pic = (this.picture ??= document.createElement('canvas'));
+    if (pic.width !== c.width || pic.height !== c.height) { pic.width = c.width; pic.height = c.height; }
+    const g = pic.getContext('2d');
+    g.clearRect(0, 0, pic.width, pic.height);
+    g.drawImage(c, 0, 0);
+    this.pictureView = { s: this.s, x: this.x, y: this.y };
+  }
+
+  pictureFits() { return !!this.pictureView && this.picture.width === this.canvas.width && this.picture.height === this.canvas.height; }
+
+  paintPicture() {
+    const { ctx, dpr } = this, v = this.pictureView, r = this.s / v.s;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+    ctx.drawImage(this.picture, (this.x - v.x * r) * dpr, (this.y - v.y * r) * dpr, this.picture.width * r, this.picture.height * r);
+  }
+
+  // Draw the map properly once the view has been still for a moment.
+  settleSoon() {
+    clearTimeout(this.settleTimer);
+    this.settleTimer = setTimeout(() => {
+      const k = this.gesture?.kind;
+      if (k === 'pan' || k === 'pinch') this.settleSoon(); else this.redraw();
+    }, 150);
   }
 
   // The land layer is patched stroke by stroke, which drifts by a shade now
@@ -454,6 +499,7 @@ class Editor {
     const [x0, y0] = this.toMap(0, 0), [x1, y1] = this.toMap(this.vw, this.vh);
     drawDoc(ctx, this.project, this.doc, { image: (id) => images.get(id), placeholder: true, landScale: this.landScale(), view: [x0, y0, x1, y1], overlay: this.preview });
     ctx.restore();
+    this.savePicture();
   }
 
   paintOverlay() {
@@ -1798,7 +1844,7 @@ class Editor {
         return;
       }
       if (e.ctrlKey || e.metaKey || Math.abs(e.deltaX) < 1) this.zoomAt(cx, cy, Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0015)));
-      else { this.x -= e.deltaX; this.y -= e.deltaY; this.redraw(); }
+      else { this.x -= e.deltaX; this.y -= e.deltaY; this.redrawView(); }
     }, { passive: false });
     this.on(document, 'keydown', (e) => this.key(e));
     // Whether the focused control was reached with the keyboard (see key()).
