@@ -8,6 +8,9 @@ async function handle(route) {
   const u = new URL(req.url());
   if (u.host === 'dl.fake') {
     if (global.__delay) { const d = global.__delay('GET', '/dl/' + decodeURIComponent(u.pathname.slice(1))); if (d) await new Promise((r) => setTimeout(r, d)); }
+    // __fail('GET', '/dl/<path>') → a status to answer with (429 says to retry after 1 s).
+    const st = global.__fail?.('GET', '/dl/' + decodeURIComponent(u.pathname.slice(1)));
+    if (st) return route.fulfill({ status: st, body: 'injected', headers: { 'access-control-allow-origin': '*', 'access-control-expose-headers': 'Retry-After', ...(st === 429 ? { 'Retry-After': '1' } : {}) } });
     const f = drive.get(decodeURIComponent(u.pathname.slice(1)));
     return f ? route.fulfill({ status: 200, body: f.body, contentType: f.type || 'application/json', headers: { 'access-control-allow-origin': '*' } }) : route.fulfill({ status: 404 });
   }
