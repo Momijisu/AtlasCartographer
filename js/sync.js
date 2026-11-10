@@ -57,16 +57,17 @@ export function sync({ force = false } = {}) {
   return running;
 }
 
-// Signing in to a different account than this device last synced with: that
+// Signing in to a different account than this device last synced with
+// (after Disconnect, or when Reconnect signs in as someone else): that
 // account has none of this device's maps or art, so all of it goes up.
 async function checkAccount() {
-  const last = store.meta.lastAccount;
-  if (!last) return;
-  if ((auth.account()?.username || '').toLowerCase() !== last) {
+  const now = (auth.account()?.username || '').toLowerCase();
+  const last = store.meta.lastAccount || store.meta.syncAccount;
+  if (last && now && now !== last) {
     await store.markAllUnsynced();
     await assetsync.markAllUnsent();
   }
-  await store.saveMeta({ lastAccount: null });
+  if (now && (now !== store.meta.syncAccount || store.meta.lastAccount)) await store.saveMeta({ lastAccount: null, syncAccount: now });
 }
 
 async function run() {
@@ -84,20 +85,30 @@ async function run() {
     await retry(INDEX, syncIndex);
     await retry(CATALOGUE, syncCatalogue);
     const remote = await listDocs();
+    // Each map on its own: one that fails is noted and the rest carry on
+    // (being throttled, or signed out, stops them all, as it would each).
+    const failed = [];
     for (const p of [...store.projects.values()]) {
-      if (p.deleted) await removeRemoteDoc(p.id, remote);
-      else {
-        // The listing's eTag saves a request on the first try; after a race,
-        // read the file afresh.
-        // A map this device doesn't have yet is looked up directly rather
-        // than trusting the listing, so it's never missed.
-        let listed = remote.get(docPath(p.id)) ?? (await store.hasDoc(p.id) ? null : undefined);
-        await retry(p.name || p.id, () => { const e = listed; listed = undefined; return syncDoc(p.id, e); });
+      try {
+        if (p.deleted) await removeRemoteDoc(p.id, remote);
+        else {
+          // The listing's eTag saves a request on the first try; after a race,
+          // read the file afresh.
+          // A map this device doesn't have yet is looked up directly rather
+          // than trusting the listing, so it's never missed.
+          let listed = remote.get(docPath(p.id)) ?? (await store.hasDoc(p.id) ? null : undefined);
+          await retry(p.name || p.id, () => { const e = listed; listed = undefined; return syncDoc(p.id, e); });
+        }
+      } catch (e) {
+        if (e instanceof Busy || e instanceof auth.ReauthRequired) throw e;
+        console.error('Syncing a map failed', p.name, e);
+        failed.push({ name: p.name || 'a deleted map', message: e.message || String(e) });
       }
     }
     await store.saveMeta({ lastSync: Date.now() });
     busyUntil = 0;
-    setStatus(store.isDirty() ? 'pending' : 'synced');
+    if (failed.length) setStatus('error', `${failed.length === 1 ? `“${failed[0].name}”` : `${failed.length} maps (“${failed[0].name}” and more)`} couldn’t sync: ${failed[0].message}. The rest did; it will try again.`);
+    else setStatus(store.isDirty() ? 'pending' : 'synced');
     assetsync.kick({ force });
   } catch (e) {
     if (e instanceof Busy) {
@@ -125,9 +136,12 @@ class Busy extends Error {
   constructor(wait) { super('OneDrive asked to slow down'); this.wait = wait; }
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-async function graph(path, opts) {
+const graph = (path, opts) => patient(() => auth.graph(path, opts));
+// The same for a file's download link.
+const download = (url) => patient(() => fetch(url));
+async function patient(go) {
   for (let attempt = 0; ; attempt++) {
-    const res = await auth.graph(path, opts);
+    const res = await go();
     if (res.status !== 429 && res.status !== 503) return res;
     const wait = +res.headers.get('Retry-After') || 10;
     if (wait > 20 || attempt >= 2) throw new Busy(wait);
@@ -167,7 +181,7 @@ async function syncFile(path, { merge, collect, isDirty, hasLocal, remoteETag, a
   } else if (remoteETag !== store.meta.eTags[path]) {
     if (!item) await readItem();
     if (!item) return false; // deleted since it was listed — start over
-    const content = await check(await fetch(item['@microsoft.graph.downloadUrl']), 'Downloading ' + path);
+    const content = await check(await download(item['@microsoft.graph.downloadUrl']), 'Downloading ' + path);
     localAhead = await merge(await content.json());
   } else {
     localAhead = isDirty();

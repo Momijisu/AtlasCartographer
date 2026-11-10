@@ -20,7 +20,7 @@ const docs = new Map(); // project id → document, loaded on first use
 // this device keeps fully downloaded.
 export let meta = {
   key: 'sync', localRev: 0, syncedRev: 0, docRev: {}, docSynced: {}, assetRev: 0, assetSynced: 0,
-  eTags: {}, lastSync: null, pinned: [], lastAccount: null,
+  eTags: {}, lastSync: null, pinned: [], lastAccount: null, syncAccount: null,
 };
 
 const listeners = new Set();

@@ -1863,14 +1863,25 @@ class Editor {
     if (/INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName) && document.activeElement.type !== 'range' && document.activeElement.type !== 'checkbox') return;
     if (document.getElementById('modal-root').childElementCount) return;
     const mod = e.ctrlKey || e.metaKey;
-    const k = e.key.toLowerCase(), code = e.code;
     // Keys by position (KeyW…), so Shift (larger steps) and other layouts work.
-    const letter = /^Key([A-Z])$/.exec(code)?.[1]?.toLowerCase();
+    const letter = /^Key([A-Z])$/.exec(e.code)?.[1]?.toLowerCase();
+    // The key as typed, or, where it doesn't type a Latin letter or a digit
+    // (Cyrillic, Greek, AZERTY's number row…), what's printed there on a US
+    // keyboard, so Ctrl+Z and the rest work on every keyboard.
+    const typed = e.key.toLowerCase(), code = e.code;
+    const k = /^[a-z0-9]$/.test(typed) || !(letter || /^Digit\d$/.test(code)) ? typed : letter || code.slice(5);
     const big = e.shiftKey;
     // Read-only: only the keys that move the view.
     if (this.readOnly && !(mod && k === '0') && (mod || ![' ', '?', 'k', '0', '+', '=', '-'].includes(k))) return;
     const any = this.selectedObjs().length > 0, sel = this.selectedObj();
     if (mod) {
+      // Undo or redo in the middle of a drag drops the drag, as Esc does: the
+      // drag would otherwise be saved on top when it's let go.
+      if ((k === 'z' || k === 'y') && this.gesture && this.gesture.kind !== 'pinch') {
+        e.preventDefault();
+        this.restore(this.gesture); this.gesture = null; this.pointers.clear(); this.syncToolbar(); this.redraw();
+        return;
+      }
       if (k === 'z') { e.preventDefault(); if (e.shiftKey) this.redo(); else this.undo(); }
       else if (k === 'y') { e.preventDefault(); this.redo(); }
       else if (k === 'c') { if (this.copySelected()) e.preventDefault(); }
@@ -2744,7 +2755,7 @@ function ring(ctx, x, y, r, scale, dashed = false) {
 export const SHORTCUTS = [
   ['Everywhere', [['Wheel', 'Zoom'], ['Space, or the middle button, and drag', 'Move the view'], ['K or ?', 'This list'], ['/', 'Layers panel'],
     ['Ctrl Z / Ctrl Shift Z (or Y)', 'Undo / redo'], ['G', 'Snap stamps to the grid, on or off'], ['Ctrl Shift ↑ ↓', 'Layer to draw on: up / down'],
-    ['Shift ↑ ↓', 'The slider last moved: up / down'], ['Tab', 'Previous tool'], ['0, or Ctrl 0', 'Fit the map'], ['+  −', 'Zoom']]],
+    ['Shift ↑ ↓', 'The slider last moved: up / down'], ['Tab', 'Previous tool'], ['Ctrl 0', 'Fit the map (0 too, in tools without opacity)'], ['+  −', 'Zoom']]],
   ['Tools', [['V', 'Select'], ['M', 'Land and water'], ['B', 'Brush (textures)'], ['O', 'Stamp'], ['R', 'Shapes'], ['L', 'Lines'], ['T', 'Text'],
     ['P', 'Pen'], ['U', 'Eraser'], ['H', 'Move the view']]],
   ['Select', [['Ctrl A', 'Select all'], ['` or ~', 'Bring back the last selection'], ['Esc', 'Deselect (or cancel what’s half done)'],
@@ -2754,7 +2765,7 @@ export const SHORTCUTS = [
     ['Ctrl Shift ↑ ↓', 'Move to the layer above / below'], ['Shift, dragging the round handle', 'Turn in 15° steps'], ['F', 'Flip'],
     ['Ctrl or Shift click, or drag', 'Add to / take from the selection'], ['Enter, or double-click', 'Edit a label'], ['Alt-click a path point', 'Remove it']]],
   ['Land', [['X', 'Paint land / water'], ['Alt (hold)', 'The other one, for one stroke'], ['W / S, or Shift + wheel', 'Brush size']]],
-  ['Brush', [['F', 'Texture catalogue'], ['W / S, or Shift + wheel', 'Size'], ['E / D', 'Strength'], ['Q / A', 'Softness']]],
+  ['Brush', [['1 … 9, 0', 'Strength 10 … 90%, 100% (opacity, with the pen and stamps)'], ['F', 'Texture catalogue'], ['W / S, or Shift + wheel', 'Size'], ['E / D', 'Strength'], ['Q / A', 'Softness']]],
   ['Stamp', [['F', 'Stamp catalogue'], ['W / S, or Shift + wheel', 'Size'], ['E / D', 'Opacity'], ['Q / A', 'Area (placing many)'], ['Alt Q / Alt A', 'Density (placing many)'],
     ['Alt → ←, or Alt + wheel', 'Next / previous variation'], ['> / <, or hold R (or Ctrl) and scroll', 'Turn the next stamp (with Alt, finely)'], ['Shift F', 'Flip the next stamp'],
     ['Ctrl click a picture', 'Pick several to place at random']]],
@@ -2769,5 +2780,5 @@ function showShortcuts() {
   if (document.getElementById('modal-root').childElementCount) return;
   modal('Keyboard shortcuts', SHORTCUTS.map(([group, rows]) => `<div class="field-label">${group}</div>
     <table class="keys">${rows.map(([k, what]) => `<tr><td><kbd>${esc(k)}</kbd></td><td>${esc(what)}</td></tr>`).join('')}</table>`).join('')
-    + '<p class="muted small">Hold Shift for larger steps. Number keys 1–9 and 0 also set opacity (10–90%, 100%). On a Mac, Cmd works wherever Ctrl is shown.</p>', { wide: true });
+    + '<p class="muted small">Hold Shift for larger steps. On a Mac, Cmd works wherever Ctrl is shown.</p>', { wide: true });
 }
